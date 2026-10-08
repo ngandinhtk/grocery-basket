@@ -7,6 +7,16 @@ for(const filename of fs.readdirSync('dist')){
  assets['/'+filename]={body:fs.readFileSync(path.join('dist',filename),'utf8'),type:type+'; charset=utf-8'};
 }
 const source=fs.readFileSync('worker/index.mjs','utf8');
+const imageTypes={'.jpg':'image/jpeg','.jpeg':'image/jpeg','.png':'image/png','.webp':'image/webp','.gif':'image/gif','.svg':'image/svg+xml'};
+function addPublicImages(folder,relative=''){
+ for(const entry of fs.readdirSync(folder,{withFileTypes:true})){
+  if(entry.isSymbolicLink())throw Error('Public assets must not contain symlinks.');
+  const filename=path.join(folder,entry.name),route=path.posix.join(relative,entry.name);
+  if(entry.isDirectory())addPublicImages(filename,route);
+  else if(imageTypes[path.extname(entry.name).toLowerCase()])assets['/'+route]={body:fs.readFileSync(filename).toString('base64'),type:imageTypes[path.extname(entry.name).toLowerCase()],encoding:'base64'};
+ }
+}
+if(fs.existsSync('public'))addPublicImages('public');
 fs.mkdirSync('dist/server',{recursive:true});
 fs.writeFileSync('dist/server/index.js',`const assets=${JSON.stringify(assets)};\n${source}`);
 console.log(`Built Basket Worker with ${Object.keys(assets).length} browser assets.`);

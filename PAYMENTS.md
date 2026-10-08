@@ -8,6 +8,7 @@ Configure production runtime values through Sites environment variables:
 - `PAYPAL_ENV`: explicitly `sandbox` for tests or `live` for real purchases. Sandbox membership does not carry into live mode.
 - `COFFEE_URL`: optional HTTPS donation page; Basket generates its QR locally.
 - `COFFEE_QR_IMAGE_URL`: optional HTTPS bank QR image; takes priority over the generated QR.
+- `public/bank-qr.jpg`: built-in bank QR fallback when no external QR image is configured. The build embeds public images and serves them without changing their bytes.
 - `COFFEE_DETAILS`: optional recipient/bank details shown as plain text.
 
 Do not put credentials in HTML, browser JavaScript or hosting.json. `.env.paypal` and all `.env*` files except `.env.example` are ignored. QR contributions are voluntary and never automatically grant Premium.

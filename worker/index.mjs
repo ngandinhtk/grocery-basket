@@ -40,7 +40,7 @@ function validateItems(items){
 }
 async function api(request,env){
  const url=new URL(request.url),path=url.pathname,user=request.headers.get('oai-authenticated-user-id');
- if(path==='/api/config'&&request.method==='GET')return json({price:PRICE,originalPrice:'18.00',currency:CURRENCY,checkoutReady:configured(env),environment:paypalEnv(env),coffeeUrl:coffeeUrl(env),coffeeQrImage:safeHttps(env.COFFEE_QR_IMAGE_URL),coffeeDetails:typeof env.COFFEE_DETAILS==='string'?env.COFFEE_DETAILS.slice(0,500):'',signedIn:Boolean(user)});
+ if(path==='/api/config'&&request.method==='GET')return json({price:PRICE,originalPrice:'18.00',currency:CURRENCY,checkoutReady:configured(env),environment:paypalEnv(env),coffeeUrl:coffeeUrl(env),coffeeQrImage:safeHttps(env.COFFEE_QR_IMAGE_URL)||(typeof assets!=='undefined'&&assets['/bank-qr.jpg']?'/bank-qr.jpg':null),coffeeDetails:typeof env.COFFEE_DETAILS==='string'?env.COFFEE_DETAILS.slice(0,500):'',signedIn:Boolean(user)});
  if(!user)throw new ApiError('SIGN_IN_REQUIRED',401);
  if(!env.DB)throw new ApiError('SERVICE_UNAVAILABLE',503);
  if(!['GET','POST','PUT','DELETE'].includes(request.method))throw new ApiError('METHOD_NOT_ALLOWED',405);
@@ -127,7 +127,8 @@ export default {
    if(path.startsWith('/api/'))return await api(request,env);
    if(!['GET','HEAD'].includes(request.method))return json({error:'METHOD_NOT_ALLOWED'},405);
    const asset=assets[path==='/'?'/index.html':path];if(!asset)return new Response('Not found',{status:404});
-   return new Response(request.method==='HEAD'?null:asset.body,{headers:{'Content-Type':asset.type,'Cache-Control':'no-cache','X-Content-Type-Options':'nosniff','Referrer-Policy':'strict-origin-when-cross-origin'}});
+   const body=asset.encoding==='base64'?Uint8Array.from(atob(asset.body),c=>c.charCodeAt(0)):asset.body;
+   return new Response(request.method==='HEAD'?null:body,{headers:{'Content-Type':asset.type,'Cache-Control':'no-cache','X-Content-Type-Options':'nosniff','Referrer-Policy':'strict-origin-when-cross-origin'}});
   }catch(error){return json({error:error instanceof ApiError?error.message:'SERVICE_UNAVAILABLE'},error instanceof ApiError?error.status:503)}
  }
 };

@@ -32,6 +32,14 @@ async function premiumApi(path,method='GET',body){
 }
 function renderPremium(){
  premiumText.forEach(([id,en,vi])=>$(id).textContent=tr(en,vi));
+ const price=document.querySelector('.premium-price');
+ price.hidden=!premiumConfig;
+ if(premiumConfig){
+  const original=price.querySelector('s'),current=price.querySelector('strong');
+  original.textContent='$'+Number(premiumConfig.originalPrice);original.setAttribute('aria-label',tr(`Original price ${premiumConfig.originalPrice} USD`,`Giá gốc ${premiumConfig.originalPrice} USD`));
+  current.textContent='$'+Number(premiumConfig.price);
+  const currency=document.createElement('span');currency.textContent=' USD';current.append(currency);
+ }
  $('template-name').placeholder=tr('e.g. Our Sunday dinner','Ví dụ: Bữa cơm chủ nhật');
  $('premium-pay').textContent=premiumBusy?tr('Please wait…','Vui lòng chờ…'):tr('Pay $3 with PayPal','Thanh toán 3 USD qua PayPal');
  $('premium-pay').disabled=premiumBusy||!premiumConfig?.checkoutReady||!accountReady||premiumActive;
