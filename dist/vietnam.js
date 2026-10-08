@@ -22,6 +22,15 @@ const templates=[
  ['🍝','Bún thịt nướng','Grilled pork noodle bowl','dish',['Bún|4','Thịt heo|2','Dưa leo|0','Rau thơm|0','Đậu phộng|4','Nước mắm|4']],
  ['🍲','Lẩu cuối tuần','Weekend hot pot','everyday',['Thịt bò|2','Tôm|2','Nấm|0','Cải thảo|0','Đậu phụ|4','Bún|4','Sả|0','Cà chua|0']]
 ];
+templates.forEach((t,i)=>t[5]=[2,14].includes(i)?'vegetarian':'savory');
+templates.push(
+ ['🍄','Nấm kho tiêu','Pepper braised mushrooms','dish',['Nấm|0','Tiêu|4','Nước tương|4','Hành tím|0','Gạo|4'],'vegetarian'],
+ ['🥬','Rau củ xào chay','Stir fried vegetables','dish',['Cải thìa|0','Cà rốt|0','Nấm|0','Bắp non|0','Nước tương|4'],'vegetarian'],
+ ['🍲','Canh nấm đậu phụ','Mushroom and tofu soup','dish',['Đậu phụ|4','Nấm|0','Cà rốt|0','Hành lá|0'],'vegetarian'],
+ ['🍜','Bún chay','Vegetarian noodle bowl','dish',['Bún|4','Đậu phụ|4','Nấm|0','Dưa leo|0','Rau thơm|0','Nước tương|4'],'vegetarian'],
+ ['🥘','Cà ri chay','Vegetarian curry','dish',['Khoai tây|0','Cà rốt|0','Đậu phụ|4','Nước cốt dừa|4','Bột cà ri|4','Sả|0'],'vegetarian'],
+ ['🥞','Bánh xèo chay','Vegetarian savory crepes','dish',['Bột bánh xèo chay|4','Nước cốt dừa|4','Nấm|0','Đậu phụ|4','Giá đỗ|0','Xà lách|0'],'vegetarian']
+);
 const phrases=[
  ['.tagline','A little planning. A better shop.','Chuẩn bị một chút. Đi chợ dễ hơn.'],
  ['#print','↗ Print list','↗ In danh sách'],['.intro .eyebrow','YOUR EVERYDAY SHOPPING COMPANION','BẠN ĐỒNG HÀNH MỖI LẦN ĐI CHỢ'],
@@ -57,17 +66,23 @@ function localize(){
  document.querySelector('.list-foot span').textContent=storageOK?tr('✓ Your list saves automatically on this device','✓ Danh sách tự lưu trên thiết bị này'):tr('Browser storage unavailable — copy your list before leaving','Không thể lưu trên trình duyệt — hãy sao chép danh sách');
  $('suggestions').innerHTML=(state.language==='vi'?[['🍚','Gạo','Pantry'],['🥚','Trứng gà','Dairy & eggs'],['🥬','Rau muống','Produce'],['🐟','Cá','Meat & seafood'],['🧄','Tỏi','Produce'],['🍶','Nước mắm','Pantry']]:staples).map(([icon,name,category])=>`<button data-quick-name="${name}" data-quick-category="${category}">${icon} ${name} ＋</button>`).join('');
  $('templates-title').textContent=tr('A little inspiration for your next shop','Gợi ý cho lần đi chợ tiếp theo');
- $('templates-note').textContent=tr('Choose a meal to add its ingredients. Adjust quantities for your household; prices are yours to fill in.','Chọn bữa ăn để thêm nguyên liệu. Điều chỉnh số lượng theo gia đình và nhập giá khi đi chợ.');
+ $('templates-note').textContent=tr('Choose a meal, then use Edit on any ingredient to change its name, quantity, unit or price. Add or remove ingredients to suit your meal.','Chọn món rồi bấm Sửa ở từng nguyên liệu để đổi tên, số lượng, đơn vị hoặc giá. Bạn có thể thêm và xóa nguyên liệu theo nhu cầu.');
  $('template-search').placeholder=tr('Search meals or ingredients…','Tìm món ăn hoặc nguyên liệu…');
  $('template-search').setAttribute('aria-label',tr('Search templates','Tìm mẫu đi chợ'));
  const selectedKind=$('template-kind').value;
  $('template-kind').innerHTML=`<option value="all">${tr('All templates','Tất cả mẫu')}</option><option value="everyday">${tr('Everyday shopping','Đi chợ hằng ngày')}</option><option value="dish">${tr('Vietnamese dishes','Món Việt Nam')}</option>`;
  $('template-kind').value=['all','everyday','dish'].includes(selectedKind)?selectedKind:'all';
+ const selectedDiet=$('template-diet').value;
+ $('template-diet').innerHTML=`<option value="all">${tr('All diets','Mặn & chay')}</option><option value="savory">${tr('Non-vegetarian','Món mặn')}</option><option value="vegetarian">${tr('Vegetarian','Món chay')}</option>`;
+ $('template-diet').value=['savory','vegetarian'].includes(selectedDiet)?selectedDiet:'all';
+ $('template-diet').setAttribute('aria-label',tr('Filter by diet','Lọc món mặn hoặc món chay'));
+ $('template-kind').setAttribute('aria-label',tr('Filter template type','Lọc loại mẫu'));
+ $('templates-count').textContent=tr(`${templates.length} templates`,`${templates.length} mẫu`);
  renderTemplates();
 }
-function renderTemplates(){const query=$('template-search').value.trim().toLocaleLowerCase(),kind=$('template-kind').value;
- const matches=templates.map((t,i)=>({t,i})).filter(({t})=>(kind==='all'||kind===t[3])&&`${t[1]} ${t[2]} ${t[4].join(' ')}`.toLocaleLowerCase().includes(query));
- $('template-grid').innerHTML=matches.length?matches.map(({t,i})=>`<article class="meal-card"><span class="meal-icon" aria-hidden="true">${t[0]}</span><div><h3>${escapeHTML(tr(t[2],t[1]))}</h3><p>${t[4].length} ${tr('ingredients','nguyên liệu')}</p></div><details><summary>${tr('View ingredients','Xem nguyên liệu')}</summary><p>${escapeHTML(t[4].map(x=>x.split('|')[0]).join(', '))}</p></details><button class="outline" data-template="${i}">＋ ${tr('Add ingredients','Thêm nguyên liệu')}</button></article>`).join(''):`<p class="empty">${tr('No matching templates. Try another search.','Chưa có mẫu phù hợp. Thử từ khóa khác nhé.')}</p>`;
+function renderTemplates(){const query=$('template-search').value.trim().toLocaleLowerCase(),kind=$('template-kind').value,diet=$('template-diet').value;
+ const matches=templates.map((t,i)=>({t,i})).filter(({t})=>(kind==='all'||kind===t[3])&&(diet==='all'||diet===t[5])&&`${t[1]} ${t[2]} ${t[4].join(' ')}`.toLocaleLowerCase().includes(query));
+ $('template-grid').innerHTML=matches.length?matches.map(({t,i})=>`<article class="meal-card"><span class="meal-icon" aria-hidden="true">${t[0]}</span><div><h3>${escapeHTML(tr(t[2],t[1]))}</h3><p>${t[4].length} ${tr('ingredients','nguyên liệu')} · ${t[5]==='vegetarian'?tr('Vegetarian','Món chay'):tr('Non-vegetarian','Món mặn')}</p></div><details><summary>${tr('View ingredients','Xem nguyên liệu')}</summary><p>${escapeHTML(t[4].map(x=>x.split('|')[0]).join(', '))}</p></details><button class="outline" data-template="${i}">＋ ${tr('Add ingredients','Thêm nguyên liệu')}</button></article>`).join(''):`<p class="empty">${tr('No matching templates. Try another search.','Chưa có mẫu phù hợp. Thử từ khóa khác nhé.')}</p>`;
 }
 function applyTemplate(index){const template=templates[index];if(!template)return;let added=0;template[4].forEach(value=>{const [name,category]=value.split('|');if(!state.items.some(x=>!x.done&&x.name.toLocaleLowerCase()===name.toLocaleLowerCase())){state.items.push({id:crypto.randomUUID(),name,category:categories[Number(category)],qty:1,price:0,done:false});added++}});filter='all';save();notify(added?tr(`${added} ingredients added`, `Đã thêm ${added} nguyên liệu`):tr('These ingredients are already on your list','Các nguyên liệu này đã có trong danh sách'));}
 const baseRender=render;
@@ -86,4 +101,5 @@ money=n=>new Intl.NumberFormat(state.language==='vi'?'vi-VN':'en-US',{style:'cur
  $('language').addEventListener('change',()=>{state.language=$('language').value;save()});
  $('suggestions').addEventListener('click',e=>{const b=e.target.closest('[data-quick-name]');if(b){add(b.dataset.quickName,b.dataset.quickCategory);notify(tr('Added to your list','Đã thêm vào danh sách'))}});
  $('template-search').addEventListener('input',renderTemplates);$('template-kind').addEventListener('change',renderTemplates);$('template-grid').addEventListener('click',e=>{const button=e.target.closest('[data-template]');if(button)applyTemplate(Number(button.dataset.template))});
+ $('template-diet').addEventListener('change',renderTemplates);
  render();
