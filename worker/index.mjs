@@ -4,8 +4,10 @@ const categories=['Produce','Dairy & eggs','Meat & seafood','Bakery','Pantry','F
 const json=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
 class ApiError extends Error{constructor(code,status=400){super(code);this.status=status}}
 const VERIFY_INTERVAL=5*60*1000,VERIFIED_GRACE=24*60*60*1000;
+const MAX_HOUSEHOLD_MEMBERS=10,MAX_HOUSEHOLD_CHANGES=200,INVITE_LIFETIME=7*24*60*60*1000;
 const paypalEnv=env=>env.PAYPAL_ENV==='live'?'live':'sandbox';
 function configured(env){return Boolean(env.PAYPAL_CLIENT_ID&&env.PAYPAL_CLIENT_SECRET&&['live','sandbox'].includes(env.PAYPAL_ENV))}
+function checkoutEnabled(env){return env.PAYPAL_CHECKOUT_ENABLED==='true'&&configured(env)}
 function safeHttps(value){try{const u=new URL(value);return u.protocol==='https:'&&!u.username&&!u.password&&u.href.length<1800?u.href:null}catch{return null}}
 function coffeeUrl(env){return safeHttps(env.COFFEE_URL)}
 async function paypal(env,path,method='GET',body,key){
@@ -62,6 +64,25 @@ function validateItems(items){
  if(!Array.isArray(items)||items.length<1||items.length>200)throw new ApiError('INVALID_ITEMS');
  return items.map(x=>{if(!x||typeof x.name!=='string'||!x.name.trim()||x.name.length>80||!categories.includes(x.category)||!Number.isFinite(x.qty)||x.qty<0.01||x.qty>999||!Number.isFinite(x.price)||x.price<0||x.price>999999999||(x.unit!==undefined&&(typeof x.unit!=='string'||x.unit.length>20)))throw new ApiError('INVALID_ITEMS');return {name:x.name.trim(),category:x.category,qty:x.qty,price:x.price,unit:x.unit?.trim()||''}});
 }
+function validateHouseholdItem(item){
+ if(!item||typeof item.id!=='string'||!/^[A-Za-z0-9_-]{1,80}$/.test(item.id)||typeof item.done!=='boolean')throw new ApiError('INVALID_ITEMS');
+ const hasActualPrice=Object.hasOwn(item,'actualPrice')||Object.hasOwn(item,'actualCurrency');
+ if(hasActualPrice&&(!Number.isFinite(item.actualPrice)||item.actualPrice<0||item.actualPrice>999999999||!['USD','VND','EUR','GBP'].includes(item.actualCurrency)))throw new ApiError('INVALID_ITEMS');
+ return {...validateItems([item])[0],id:item.id,done:item.done,...(hasActualPrice?{actualPrice:item.actualPrice,actualCurrency:item.actualCurrency}:{})};
+}
+async function householdForUser(db,user){return db.prepare('SELECT household_id,role FROM household_members WHERE user_id = ?').bind(user).first()}
+async function householdItemList(db,householdId){
+ const result=await db.prepare('SELECT payload FROM household_items WHERE household_id = ? ORDER BY updated_at,item_id').bind(householdId).all();
+ return result.results.map(row=>JSON.parse(row.payload));
+}
+async function hashInvite(token){
+ const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(token));
+ return Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,'0')).join('');
+}
+function newInviteToken(){
+ const bytes=crypto.getRandomValues(new Uint8Array(32));
+ return btoa(String.fromCharCode(...bytes)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
 function expiredOrder(order,row){
  if(['VOIDED','EXPIRED'].includes(order.status))return true;
  // CREATED may remain queryable after expiry. Use the documented maximum
@@ -78,7 +99,7 @@ async function resetAttempt(db,user,row,environment,reason){
 }
 async function api(request,env){
  const url=new URL(request.url),path=url.pathname,user=request.headers.get('oai-authenticated-user-id');
- if(path==='/api/config'&&request.method==='GET')return json({...PREMIUM_OFFER,checkoutReady:configured(env),environment:paypalEnv(env),coffeeUrl:coffeeUrl(env),coffeeQrImage:safeHttps(env.COFFEE_QR_IMAGE_URL)||(typeof assets!=='undefined'&&assets['/bank-qr.jpg']?'/bank-qr.jpg':null),coffeeDetails:typeof env.COFFEE_DETAILS==='string'?env.COFFEE_DETAILS.slice(0,500):'',signedIn:Boolean(user)});
+ if(path==='/api/config'&&request.method==='GET')return json({...PREMIUM_OFFER,checkoutReady:checkoutEnabled(env),environment:paypalEnv(env),coffeeUrl:coffeeUrl(env),coffeeQrImage:safeHttps(env.COFFEE_QR_IMAGE_URL),coffeeDetails:typeof env.COFFEE_DETAILS==='string'?env.COFFEE_DETAILS.slice(0,500):'',signedIn:Boolean(user)});
  if(!user)throw new ApiError('SIGN_IN_REQUIRED',401);
  if(!env.DB)throw new ApiError('SERVICE_UNAVAILABLE',503);
  if(!['GET','POST','PUT','DELETE'].includes(request.method))throw new ApiError('METHOD_NOT_ALLOWED',405);
@@ -90,6 +111,7 @@ async function api(request,env){
   try{body=JSON.parse(raw)}catch{throw new ApiError('INVALID_JSON')}
   if(!body||typeof body!=='object'||Array.isArray(body))throw new ApiError('INVALID_JSON');
  }
+ if(['/api/paypal/create-order','/api/paypal/reconcile','/api/paypal/capture-order'].includes(path)&&request.method==='POST'&&!checkoutEnabled(env))throw new ApiError('PAYPAL_TEMPORARILY_DISABLED',503);
  if(path==='/api/premium/status'&&request.method==='GET')return json({premium:await isPremium(env.DB,user,env)});
  if(path==='/api/paypal/create-order'&&request.method==='POST'){
   if(!configured(env))throw new ApiError('PAYPAL_NOT_CONFIGURED',503);
@@ -139,6 +161,79 @@ async function api(request,env){
   return json({premium:false,status:expiredOrder(order,row)?'EXPIRED':order.status});
  }
  if(path==='/api/paypal/capture-order'&&request.method==='POST')return captureOrder(env,user,body.orderId);
+ if(path==='/api/household'&&request.method==='GET'){
+  const membership=await householdForUser(env.DB,user);
+  if(!membership)return json({household:null,items:[]});
+  const household=await env.DB.prepare('SELECT id,owner_id FROM households WHERE id = ?').bind(membership.household_id).first();
+  const count=await env.DB.prepare('SELECT COUNT(*) AS count FROM household_members WHERE household_id = ?').bind(membership.household_id).first();
+  return json({household:{id:household.id,isOwner:membership.role==='owner',memberCount:count.count},items:await householdItemList(env.DB,membership.household_id)});
+ }
+ if(path==='/api/household'&&request.method==='POST'){
+  if(await householdForUser(env.DB,user))throw new ApiError('ALREADY_IN_HOUSEHOLD',409);
+  const id=crypto.randomUUID(),now=new Date().toISOString();
+  await env.DB.batch([
+   env.DB.prepare('INSERT INTO households (id,owner_id,created_at) VALUES (?,?,?)').bind(id,user,now),
+   env.DB.prepare("INSERT INTO household_members (user_id,household_id,role,joined_at) VALUES (?,?, 'owner', ?)").bind(user,id,now)
+  ]);
+  return json({household:{id,isOwner:true,memberCount:1},items:[]},201);
+ }
+ if(path==='/api/household/invites'&&request.method==='POST'){
+  const membership=await householdForUser(env.DB,user);if(!membership)throw new ApiError('HOUSEHOLD_REQUIRED',409);
+  const count=await env.DB.prepare('SELECT COUNT(*) AS count FROM household_members WHERE household_id = ?').bind(membership.household_id).first();
+  if(count.count>=MAX_HOUSEHOLD_MEMBERS)throw new ApiError('HOUSEHOLD_FULL',409);
+  const now=new Date(),nowText=now.toISOString();
+  await env.DB.prepare('DELETE FROM household_invites WHERE household_id = ? AND (used_at IS NOT NULL OR expires_at <= ?)').bind(membership.household_id,nowText).run();
+  const pending=await env.DB.prepare('SELECT COUNT(*) AS count FROM household_invites WHERE household_id = ? AND used_at IS NULL AND expires_at > ?').bind(membership.household_id,nowText).first();
+  if(pending.count>=MAX_HOUSEHOLD_MEMBERS-count.count)throw new ApiError('HOUSEHOLD_INVITES_PENDING',409);
+  const token=newInviteToken(),expiresAt=new Date(now.getTime()+INVITE_LIFETIME).toISOString();
+  const inserted=await env.DB.prepare('INSERT INTO household_invites (token_hash,household_id,created_by,created_at,expires_at) SELECT ?,?,?,?,? WHERE (SELECT COUNT(*) FROM household_invites WHERE household_id = ? AND used_at IS NULL AND expires_at > ?) < (? - (SELECT COUNT(*) FROM household_members WHERE household_id = ?))').bind(await hashInvite(token),membership.household_id,user,nowText,expiresAt,membership.household_id,nowText,MAX_HOUSEHOLD_MEMBERS,membership.household_id).run();
+  if(!inserted.meta.changes)throw new ApiError('HOUSEHOLD_INVITES_PENDING',409);
+  return json({token,expiresAt},201);
+ }
+ if(path==='/api/household/join'&&request.method==='POST'){
+  if(await householdForUser(env.DB,user))throw new ApiError('ALREADY_IN_HOUSEHOLD',409);
+  if(typeof body.token!=='string'||!/^[A-Za-z0-9_-]{40,50}$/.test(body.token))throw new ApiError('INVALID_INVITE',400);
+  const tokenHash=await hashInvite(body.token),now=new Date().toISOString(),claim=now+':'+crypto.randomUUID();
+  const invite=await env.DB.prepare('SELECT household_id,expires_at,used_at FROM household_invites WHERE token_hash = ?').bind(tokenHash).first();
+  if(!invite||invite.used_at||Date.parse(invite.expires_at)<=Date.now())throw new ApiError('INVALID_INVITE',410);
+  const results=await env.DB.batch([
+   env.DB.prepare('UPDATE household_invites SET used_at = ? WHERE token_hash = ? AND used_at IS NULL AND expires_at > ? AND (SELECT COUNT(*) FROM household_members WHERE household_id = ?) < ?').bind(claim,tokenHash,now,invite.household_id,MAX_HOUSEHOLD_MEMBERS),
+   env.DB.prepare("INSERT INTO household_members (user_id,household_id,role,joined_at) SELECT ?, household_id, 'member', ? FROM household_invites WHERE token_hash = ? AND used_at = ?").bind(user,now,tokenHash,claim)
+  ]);
+  if(!results[0].meta.changes||!results[1].meta.changes)throw new ApiError('INVALID_INVITE',410);
+  return json({householdId:invite.household_id},201);
+ }
+ if(path==='/api/household/items'&&request.method==='GET'){
+  const membership=await householdForUser(env.DB,user);if(!membership)throw new ApiError('HOUSEHOLD_REQUIRED',409);
+  return json({items:await householdItemList(env.DB,membership.household_id)});
+ }
+ if(path==='/api/household/items'&&request.method==='POST'){
+  const membership=await householdForUser(env.DB,user);if(!membership)throw new ApiError('HOUSEHOLD_REQUIRED',409);
+  if(!Array.isArray(body.upsert)||!Array.isArray(body.delete)||body.upsert.length+body.delete.length>MAX_HOUSEHOLD_CHANGES)throw new ApiError('INVALID_ITEMS');
+  const items=body.upsert.map(validateHouseholdItem),deleted=body.delete;
+  if(deleted.some(id=>typeof id!=='string'||!/^[A-Za-z0-9_-]{1,80}$/.test(id)))throw new ApiError('INVALID_ITEMS');
+  const statements=items.map(item=>env.DB.prepare('INSERT INTO household_items (item_id,household_id,payload,updated_at) VALUES (?,?,?,?) ON CONFLICT(item_id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at WHERE household_items.household_id = excluded.household_id').bind(item.id,membership.household_id,JSON.stringify(item),new Date().toISOString()));
+  if(deleted.length)statements.push(env.DB.prepare(`DELETE FROM household_items WHERE household_id = ? AND item_id IN (${deleted.map(()=>'?').join(',')})`).bind(membership.household_id,...deleted));
+  if(statements.length)await env.DB.batch(statements);
+  return json({items:await householdItemList(env.DB,membership.household_id)});
+ }
+ if(path==='/api/household/leave'&&request.method==='DELETE'){
+  const membership=await householdForUser(env.DB,user);if(!membership)throw new ApiError('HOUSEHOLD_REQUIRED',409);
+  if(membership.role==='owner')throw new ApiError('HOUSEHOLD_OWNER',409);
+  await env.DB.prepare('DELETE FROM household_members WHERE user_id = ? AND household_id = ?').bind(user,membership.household_id).run();
+  return json({ok:true});
+ }
+ if(path==='/api/household'&&request.method==='DELETE'){
+  const membership=await householdForUser(env.DB,user);if(!membership)throw new ApiError('HOUSEHOLD_REQUIRED',409);
+  if(membership.role!=='owner')throw new ApiError('HOUSEHOLD_OWNER_REQUIRED',403);
+  await env.DB.batch([
+   env.DB.prepare('DELETE FROM household_invites WHERE household_id = ?').bind(membership.household_id),
+   env.DB.prepare('DELETE FROM household_items WHERE household_id = ?').bind(membership.household_id),
+   env.DB.prepare('DELETE FROM household_members WHERE household_id = ?').bind(membership.household_id),
+   env.DB.prepare('DELETE FROM households WHERE id = ? AND owner_id = ?').bind(membership.household_id,user)
+  ]);
+  return json({ok:true});
+ }
  if(!await isPremium(env.DB,user,env))throw new ApiError('PREMIUM_REQUIRED',403);
  if(path==='/api/templates'&&request.method==='GET'){
   const data=await env.DB.prepare('SELECT id,name,items,currency FROM saved_templates WHERE user_id = ? ORDER BY created_at DESC').bind(user).all();

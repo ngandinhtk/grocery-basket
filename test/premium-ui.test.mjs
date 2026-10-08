@@ -4,23 +4,29 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import {webcrypto} from 'node:crypto';
 
-async function ui(){
+async function ui({failConfig=false}={}){
  const nodes={},handlers={},calls=[];
- function node(id){return nodes[id]??={value:'',textContent:'',innerHTML:'',hidden:false,disabled:false,style:{},children:[],append(child){this.children.push(child)},replaceChildren(){this.children=[]},setAttribute(key,value){this[key]=value},getAttribute(key){return this[key]},focus(){},showModal(){this.open=true},close(){this.open=false;handlers[id+':close']?.({})},querySelector(selector){return node(id+selector)},addEventListener(type,callback){handlers[id+':'+type]=callback}}}
- const context=vm.createContext({document:{getElementById:node,querySelector:node,querySelectorAll:()=>[],createElement:()=>node('created-'+Math.random())},window:{location:{search:'',assign(){}},history:{replaceState(){}},addEventListener:(type,callback)=>handlers['window:'+type]=callback},fetch:async(path,options={})=>{
-  calls.push([path,options]);return Response.json(path==='/api/config'?{signedIn:false,price:'7.50',originalPrice:'21.00',currency:'USD'}:path==='/api/premium/status'?{premium:true}:path==='/api/templates'?{templates:[]}:path==='/api/weekly-plan'?{days:['Server meal','','','','','','']}:{ok:true});
+ function node(id){return nodes[id]??={value:'',textContent:'',innerHTML:'',hidden:false,disabled:false,style:{},children:[],append(child){this.children.push(child)},replaceChildren(){this.children=[]},setAttribute(key,value){this[key]=value},getAttribute(key){return this[key]},focus(){},showModal(){this.open=true},close(){this.open=false;handlers[id+':close']?.({})},querySelector(selector){return this.children.find(child=>selector==='img'&&child.tagName==='IMG')||(selector==='img'?null:node(id+selector))},addEventListener(type,callback){handlers[id+':'+type]=callback}}}
+ const context=vm.createContext({document:{getElementById:node,querySelector:node,querySelectorAll:()=>[],createElement:tag=>{const el=node('created-'+Math.random());el.tagName=tag.toUpperCase();return el}},window:{location:{search:'',assign(){}},history:{replaceState(){}},addEventListener:(type,callback)=>handlers['window:'+type]=callback},fetch:async(path,options={})=>{
+  calls.push([path,options]);if(failConfig&&path==='/api/config')throw Error('offline');return Response.json(path==='/api/config'?{signedIn:false,price:'7.50',originalPrice:'21.00',currency:'USD'}:path==='/api/premium/status'?{premium:true}:path==='/api/templates'?{templates:[]}:path==='/api/weekly-plan'?{days:['Server meal','','','','','','']}:{ok:true});
  },Response,URLSearchParams,crypto:webcrypto,console});
- vm.runInContext(`const $=id=>document.getElementById(id);const state={items:[],currency:'VND'};let filter='all';const templates=[];function tr(en,vi){return vi}function escapeHTML(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}function render(){}function save(){}function notify(){}function showMainTab(){}`,context);
+ vm.runInContext(`const $=id=>document.getElementById(id);const state={items:[],currency:'VND'};let filter='all';const categories=['Produce','Dairy & eggs','Meat & seafood','Bakery','Pantry','Frozen','Household'];const viCategories=categories;const templates=[];function tr(en,vi){return vi}function escapeHTML(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}function render(){}function save(){}function notify(){}function showMainTab(){}`,context);
  vm.runInContext(fs.readFileSync('dist/premium-data.js','utf8'),context);
+ vm.runInContext(fs.readFileSync('dist/coffee-bank.js','utf8'),context);
  vm.runInContext(fs.readFileSync('dist/premium.js','utf8'),context);
  await new Promise(resolve=>setImmediate(resolve));
  return {context,nodes,handlers,calls,run:source=>vm.runInContext(source,context)};
 }
 
-test('checkout labels use the server price and initial HTML contains no competing price',async()=>{
- const app=await ui();assert.equal(app.nodes['premium-pay'].textContent,'Thanh toán 7.5 USD qua PayPal');
- assert.equal(app.nodes['.premium-pricestrong'].textContent,'$7.5');
- const html=fs.readFileSync('dist/index.html','utf8');assert(html.includes('class="premium-price" hidden'));assert(!html.includes('$23'));assert(!html.includes('$8'));
+test('Premium checkout stays hidden while the temporary pause is active',async()=>{
+ const app=await ui();
+ assert.equal(app.nodes['premium-pay'].hidden,true);
+ assert.equal(app.nodes['premium-availability'].textContent,'Thanh toán Premium tạm thời chưa khả dụng.');
+ const html=fs.readFileSync('dist/index.html','utf8');assert(html.includes('id="premium-pay" class="paypal-button" type="button" disabled hidden'));
+ assert(html.includes('class="premium-intro" hidden'));
+ assert(html.includes('class="premium-layout qr-only"><div hidden>'));
+ assert(html.includes('<div id="coffee-qr"></div>'));
+ assert(!html.includes('id="coffee-link"'));
 });
 
 test('template refreshes and slow status requests preserve unsaved weekly input',async()=>{
@@ -73,15 +79,41 @@ test('foreign and legacy template prices never become local currency prices',asy
  app.run('openTemplateImport(savedMeals[0])');assert(app.nodes['import-currency'].textContent.includes('chưa rõ tiền tệ'));
 });
 
-test('donation QR exists before configuration loads and failed external images use the bundled QR',async()=>{
+test('donation QR uses the embedded bank image and keeps the thank-you message',async()=>{
  const html=fs.readFileSync('dist/index.html','utf8');
- assert(html.includes('<div id="coffee-qr"><img src="/bank-qr.jpg"'));
- assert(html.includes('id="coffee-qr-open"'));
+ assert(html.includes('<div id="coffee-qr"></div>'));
+ assert(!html.includes('coffee-qr-open'));
  const app=await ui();
- assert.equal(app.nodes['coffee-qr'].children[0].src,'/bank-qr.jpg');
- app.run(`premiumConfig.coffeeQrImage='https://example.com/unavailable.jpg';renderCoffeeQr();`);
- const image=app.nodes['coffee-qr'].children[0];image.onerror();
- assert.equal(image.src,'/bank-qr.jpg');assert.equal(app.nodes['coffee-qr-open'].href,'/bank-qr.jpg');
- image.onerror();assert.equal(app.nodes['coffee-missing'].hidden,false);
- image.onload();assert.equal(app.nodes['coffee-missing'].hidden,true);
+ assert(app.nodes['coffee-qr'].children[0].src.startsWith('data:image/jpeg;base64,'));
+ assert(app.nodes['coffee-details'].textContent.includes('9021919786808'));
+ assert(app.nodes['coffee-details'].textContent.includes('Timo'));
+ assert.equal(app.nodes['coffee-note'].textContent,'Cảm ơn bạn đã ủng hộ!');
+ app.run('renderCoffeeQr()');
+ assert.equal(app.nodes['coffee-qr'].children.length,1);
+ assert(app.nodes['coffee-qr'].children[0].src.startsWith('data:image/jpeg;base64,'));
+ assert.equal(app.nodes['coffee-missing'].hidden,true);
+});
+
+test('donation QR renders even when premium configuration is unavailable',async()=>{
+ const app=await ui({failConfig:true});
+ assert(app.nodes['coffee-qr'].children[0].src.startsWith('data:image/jpeg;base64,'));
+ assert.equal(app.nodes['coffee-missing'].hidden,true);
+ assert(app.nodes['premium-message'].textContent.includes('Không thể kết nối'));
+});
+
+test('weekly meal plan builds a deduplicated list and skips items already at home',async()=>{
+ const app=await ui();
+ app.run(`templates.push(['🍚','Bữa cơm','Family meal','dish',['Gạo|4','Trứng gà|1'],'savory'],['🥣','Bữa sáng','Breakfast','dish',['Trứng gà|1','Sữa tươi|1'],'savory']);`);
+ app.run(`savedMeals=[{name:'Meal prep',currency:'VND',items:[{name:'Rice',category:'Pantry',qty:2,price:12000}]}];$('weekly-0').value='Bữa cơm';$('weekly-1').value='Breakfast';$('weekly-2').value='Meal prep';$('weekly-3').value='Custom meal';prepareWeeklyShopping()`);
+ assert.equal(app.run('weeklyShoppingIngredients.length'),4);
+ assert(app.nodes['weekly-shopping-unmatched'].textContent.includes('Custom meal'));
+ assert(app.nodes['weekly-shopping-items'].innerHTML.includes('Gạo'));
+ app.handlers['weekly-shopping-items:change']({target:{checked:true,dataset:{weeklyHave:'0'},closest(){return this}}});
+ app.handlers['weekly-shopping-add:click']();
+ const result=app.run('JSON.stringify(state.items.map(({name,qty,price,done})=>({name,qty,price,done})))');
+ assert.deepEqual(JSON.parse(result),[
+  {name:'Trứng gà',qty:1,price:0,done:false},
+  {name:'Sữa tươi',qty:1,price:0,done:false},
+  {name:'Rice',qty:2,price:12000,done:false}
+ ]);
 });

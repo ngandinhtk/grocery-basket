@@ -11,10 +11,12 @@ function showMainTab(tab,focus=false){
  }
 }
 function localizeNavigation(){
- $('main-tabs').setAttribute('aria-label',tr('Shopping and meal planning','Đi chợ và lên thực đơn'));
+ $('main-tabs').setAttribute('aria-label',tr('Shopping and support','Đi chợ và ủng hộ'));
  $('tab-shopping').textContent=tr('Shopping list','Danh sách đi chợ');
  $('tab-recipes').textContent=tr('Templates & meal ideas','Mẫu & gợi ý món ăn');
- $('tab-premium').textContent='✦ Premium';
+ $('tab-premium').textContent=tr('Support Basket','Ủng hộ Basket');
+ shoppingModeToggle.textContent=tr(shoppingMode?'Exit shopping mode':'Start shopping mode',shoppingMode?'Thoát chế độ đi chợ':'Bắt đầu đi chợ');
+ shoppingModeToggle.setAttribute('aria-pressed',String(shoppingMode));
 }
 for(const name of mainTabs){
  const button=$(`tab-${name}`);

@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import vm from 'node:vm';
 import {DatabaseSync} from 'node:sqlite';
 import worker,{validateCapture,validateItems,coffeeUrl} from '../worker/index.mjs';
 function database(){const sql=new DatabaseSync(':memory:');for(const entry of JSON.parse(fs.readFileSync('drizzle/meta/_journal.json','utf8')).entries)sql.exec(fs.readFileSync('drizzle/'+entry.tag+'.sql','utf8'));return {sql,async batch(statements){sql.exec('BEGIN');try{const results=[];for(const statement of statements)results.push(await statement.run());sql.exec('COMMIT');return results}catch(error){sql.exec('ROLLBACK');throw error}},prepare(query){const statement=sql.prepare(query);let values=[];return {bind(...args){values=args;return this},async first(){return statement.get(...values)||null},async all(){return {results:statement.all(...values)}},async run(){return {meta:{changes:Number(statement.run(...values).changes)}}}}}}}
@@ -14,7 +13,7 @@ test('payment validation rejects pending, wrong totals, wrong owner and multiple
  for(const change of [x=>x.status='APPROVED',x=>x.purchase_units[0].custom_id='bob',x=>x.purchase_units[0].payments.captures[0].amount.value='0.01',x=>x.purchase_units[0].payments.captures[0].status='PENDING',x=>x.purchase_units[0].payments.captures.push(capture)]){const data=order();change(data);assert.throws(()=>validateCapture(data,{order_id:'ORDER123456789'},'alice'))}
 });
 test('authorization, checkout, idempotent capture, Premium features and refund revocation',async t=>{
- const DB=database(),env={DB,PAYPAL_CLIENT_ID:'test-id',PAYPAL_CLIENT_SECRET:'test-secret',PAYPAL_ENV:'sandbox'};
+ const DB=database(),env={DB,PAYPAL_CLIENT_ID:'test-id',PAYPAL_CLIENT_SECRET:'test-secret',PAYPAL_ENV:'sandbox',PAYPAL_CHECKOUT_ENABLED:'true'};
  const originalFetch=globalThis.fetch;let orderStatus='CREATED',captureStatus='COMPLETED',createCalls=0,captureCalls=0;
  globalThis.fetch=async(url,options={})=>{
   if(url.endsWith('/v1/oauth2/token'))return Response.json({access_token:'test-token'});
@@ -44,10 +43,23 @@ test('authorization, checkout, idempotent capture, Premium features and refund r
  response=await worker.fetch(request('/api/weekly-plan','PUT',{days:['Phở','Bún','Cơm','','','','']}),env);assert.equal(response.status,200);
  response=await worker.fetch(request('/api/weekly-plan'),env);assert.equal((await response.json()).days[0],'Phở');
  response=await worker.fetch(request('/api/weekly-plan','PUT',{days:['short']}),env);assert.equal(response.status,400);
- response=await worker.fetch(request('/api/config','GET',undefined,null),{...env,COFFEE_URL:'https://buymeacoffee.com/mybasket'});const config=await response.json();assert.equal(config.coffeeUrl,'https://buymeacoffee.com/mybasket');assert(!JSON.stringify(config).includes('test-secret'));assert.equal(config.price,'3.00');
+ response=await worker.fetch(request('/api/config','GET',undefined,null),{...env,COFFEE_URL:'https://buymeacoffee.com/mybasket'});const config=await response.json();assert.equal(config.coffeeUrl,'https://buymeacoffee.com/mybasket');assert(!JSON.stringify(config).includes('test-secret'));assert.equal(config.price,'3.00');assert.equal(config.checkoutReady,true);
  captureStatus='REFUNDED';DB.sql.exec("UPDATE payment_orders SET verified_at = '2000-01-01'");
  response=await worker.fetch(request('/api/premium/status'),env);assert.equal((await response.json()).premium,false);
  response=await worker.fetch(request('/api/templates'),env);assert.equal(response.status,403);
+});
+test('PayPal checkout is disabled unless it is explicitly enabled',async t=>{
+ const DB=database(),env={DB,PAYPAL_CLIENT_ID:'test-id',PAYPAL_CLIENT_SECRET:'test-secret',PAYPAL_ENV:'sandbox'};
+ const originalFetch=globalThis.fetch;
+ globalThis.fetch=async()=>{throw Error('PayPal must not be contacted while checkout is disabled')};
+ t.after(()=>{globalThis.fetch=originalFetch;DB.sql.close()});
+ const config=await (await worker.fetch(request('/api/config','GET',undefined,null),env)).json();
+ assert.equal(config.checkoutReady,false);
+ for(const path of ['/api/paypal/create-order','/api/paypal/reconcile','/api/paypal/capture-order']){
+  const response=await worker.fetch(request(path,'POST',path.endsWith('capture-order')?{orderId:'ORDER123456789'}:{}),env);
+  assert.equal(response.status,503);
+  assert.equal((await response.json()).error,'PAYPAL_TEMPORARILY_DISABLED');
+ }
 });
 test('an unknown price or successful browser flag cannot enable Premium',async()=>{
  const DB=database();const env={DB};
@@ -62,14 +74,8 @@ test('custom ingredient validation and safe donation URLs',()=>{
  assert.equal(coffeeUrl({COFFEE_URL:'https://user:password@example.com'}),null);
  assert.equal(coffeeUrl({}),null);
 });
-test('QR generator creates an SVG from the actual donation URL',()=>{
- const context=vm.createContext({});vm.runInContext(fs.readFileSync('dist/qrcode.js','utf8'),context);
- const svg=vm.runInContext("const qr=qrcode(0,'M');qr.addData('https://buymeacoffee.com/mybasket');qr.make();qr.createSvgTag({cellSize:4,margin:16,scalable:true})",context);
- assert(svg.startsWith('<svg'));assert(svg.includes('<path'));assert(!svg.includes('<script'));
-});
-
 test('previously verified purchases survive a temporary outage without extending the grace period',async t=>{
- const DB=database(),env={DB,PAYPAL_CLIENT_ID:'id',PAYPAL_CLIENT_SECRET:'secret',PAYPAL_ENV:'sandbox'};
+ const DB=database(),env={DB,PAYPAL_CLIENT_ID:'id',PAYPAL_CLIENT_SECRET:'secret',PAYPAL_ENV:'sandbox',PAYPAL_CHECKOUT_ENABLED:'true'};
  const verified=new Date(Date.now()-10*60*1000).toISOString();
  DB.sql.prepare("INSERT INTO payment_orders (user_id,request_id,environment,status,capture_id,created_at,verified_at) VALUES (?,?,'sandbox','COMPLETED',?,?,?)").run('alice','request-grace',capture.id,verified,verified);
  let reads=0;const previous=globalThis.fetch;
@@ -85,7 +91,7 @@ test('previously verified purchases survive a temporary outage without extending
 });
 
 test('confirmed refunds revoke access even within the grace period',async t=>{
- const DB=database(),env={DB,PAYPAL_CLIENT_ID:'id',PAYPAL_CLIENT_SECRET:'secret',PAYPAL_ENV:'sandbox'};
+ const DB=database(),env={DB,PAYPAL_CLIENT_ID:'id',PAYPAL_CLIENT_SECRET:'secret',PAYPAL_ENV:'sandbox',PAYPAL_CHECKOUT_ENABLED:'true'};
  const verified=new Date(Date.now()-10*60*1000).toISOString();
  DB.sql.prepare("INSERT INTO payment_orders (user_id,request_id,environment,status,capture_id,created_at,verified_at) VALUES (?,?,'sandbox','COMPLETED',?,?,?)").run('alice','refund-request',capture.id,verified,verified);
  const previous=globalThis.fetch;
@@ -97,7 +103,7 @@ test('confirmed refunds revoke access even within the grace period',async t=>{
 });
 
 test('expired attempts are archived, temporary lookup errors never create a replacement charge',async t=>{
- const DB=database(),env={DB,PAYPAL_CLIENT_ID:'id',PAYPAL_CLIENT_SECRET:'secret',PAYPAL_ENV:'sandbox'};
+ const DB=database(),env={DB,PAYPAL_CLIENT_ID:'id',PAYPAL_CLIENT_SECRET:'secret',PAYPAL_ENV:'sandbox',PAYPAL_CHECKOUT_ENABLED:'true'};
  DB.sql.prepare("INSERT INTO payment_orders (user_id,request_id,order_id,environment,status,created_at) VALUES ('alice','old-request','OLDORDER12345','sandbox','CREATED',?)").run(new Date(Date.now()-73*60*60*1000).toISOString());
  const previous=globalThis.fetch;let unavailable=true,created=0;
  globalThis.fetch=async(url,options={})=>{
@@ -116,7 +122,7 @@ test('expired attempts are archived, temporary lookup errors never create a repl
 });
 
 test('lost PayPal return redirects can be reconciled only by the order owner',async t=>{
- const DB=database(),env={DB,PAYPAL_CLIENT_ID:'id',PAYPAL_CLIENT_SECRET:'secret',PAYPAL_ENV:'sandbox'};
+ const DB=database(),env={DB,PAYPAL_CLIENT_ID:'id',PAYPAL_CLIENT_SECRET:'secret',PAYPAL_ENV:'sandbox',PAYPAL_CHECKOUT_ENABLED:'true'};
  DB.sql.prepare("INSERT INTO payment_orders (user_id,request_id,order_id,environment,status,created_at) VALUES ('alice','reconcile-request','ORDER123456789','sandbox','CREATED',?)").run(new Date().toISOString());
  const previous=globalThis.fetch;let captured=0,state='APPROVED';
  globalThis.fetch=async(url,options={})=>{

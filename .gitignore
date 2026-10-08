@@ -5,3 +5,5 @@
 node_modules/
 dist/server/
 dist/.openai/
+dist/coffee-bank.js
+.openai/qr-matrix.json
