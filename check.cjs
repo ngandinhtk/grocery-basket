@@ -1,0 +1,18 @@
+const fs = require('fs'), vm = require('vm'), assert = require('assert');
+const nodes = {}, storage = {};
+const node = () => ({ value: '', textContent: '', innerHTML: '', style: {}, dataset: {}, classList: { toggle() {} }, addEventListener() {}, checkValidity() { return true; } });
+const context = vm.createContext({ document: { getElementById: id => nodes[id] ??= node(), querySelector: () => node(), querySelectorAll: () => [] }, localStorage: { getItem: () => null, setItem: (k, v) => storage[k] = v }, Intl, crypto: require('crypto').webcrypto, setTimeout, clearTimeout });
+vm.runInContext(fs.readFileSync('dist/app.js', 'utf8'), context);
+vm.runInContext('add("Apples", "Produce", 2, 3); add("Milk", "Dairy & eggs", 1, 4); state.items[0].done = true; save();', context);
+assert.equal(nodes.total.textContent, '$10.00');
+assert.equal(nodes.bought.textContent, '$6.00');
+assert.equal(nodes.left.textContent, '$4.00');
+assert.equal(JSON.parse(storage['basket-v1']).items.length, 2);
+vm.runInContext('filter = "remaining"; render();', context);
+assert(!nodes.items.innerHTML.includes('Apples'));
+assert(nodes.items.innerHTML.includes('Milk'));
+vm.runInContext('state.budget = 5; render();', context);
+assert(nodes['budget-message'].textContent.includes('over'));
+vm.runInContext('add("<script>", "Produce");', context);
+assert(nodes.items.innerHTML.includes('&lt;script&gt;'));
+console.log('Passed totals, basket amounts, filtering, persistence, budget status, and input escaping.');
