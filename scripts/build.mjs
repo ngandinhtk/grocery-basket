@@ -19,4 +19,7 @@ function addPublicImages(folder,relative=''){
 if(fs.existsSync('public'))addPublicImages('public');
 fs.mkdirSync('dist/server',{recursive:true});
 fs.writeFileSync('dist/server/index.js',`const assets=${JSON.stringify(assets)};\n${source}`);
+fs.mkdirSync('dist/.openai',{recursive:true});
+fs.copyFileSync('.openai/hosting.json','dist/.openai/hosting.json');
+fs.cpSync('drizzle','dist/.openai/drizzle',{recursive:true});
 console.log(`Built Basket Worker with ${Object.keys(assets).length} browser assets.`);
