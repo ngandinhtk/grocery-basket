@@ -6,7 +6,7 @@ import {webcrypto} from 'node:crypto';
 
 async function ui(){
  const nodes={},handlers={},calls=[];
- function node(id){return nodes[id]??={value:'',textContent:'',innerHTML:'',hidden:false,disabled:false,style:{},children:[],append(child){this.children.push(child)},replaceChildren(){this.children=[]},setAttribute(){},focus(){},showModal(){this.open=true},close(){this.open=false;handlers[id+':close']?.({})},querySelector(selector){return node(id+selector)},addEventListener(type,callback){handlers[id+':'+type]=callback}}}
+ function node(id){return nodes[id]??={value:'',textContent:'',innerHTML:'',hidden:false,disabled:false,style:{},children:[],append(child){this.children.push(child)},replaceChildren(){this.children=[]},setAttribute(key,value){this[key]=value},getAttribute(key){return this[key]},focus(){},showModal(){this.open=true},close(){this.open=false;handlers[id+':close']?.({})},querySelector(selector){return node(id+selector)},addEventListener(type,callback){handlers[id+':'+type]=callback}}}
  const context=vm.createContext({document:{getElementById:node,querySelector:node,querySelectorAll:()=>[],createElement:()=>node('created-'+Math.random())},window:{location:{search:'',assign(){}},history:{replaceState(){}},addEventListener:(type,callback)=>handlers['window:'+type]=callback},fetch:async(path,options={})=>{
   calls.push([path,options]);return Response.json(path==='/api/config'?{signedIn:false,price:'7.50',originalPrice:'21.00',currency:'USD'}:path==='/api/premium/status'?{premium:true}:path==='/api/templates'?{templates:[]}:path==='/api/weekly-plan'?{days:['Server meal','','','','','','']}:{ok:true});
  },Response,URLSearchParams,crypto:webcrypto,console});
@@ -71,4 +71,17 @@ test('foreign and legacy template prices never become local currency prices',asy
  let result=app.run(`combineTemplate([],savedMeals[0],{currency:'USD'})`);assert.equal(result.items[0].price,0);assert(result.resetPrices);
  app.run('savedMeals[0].currency=null');result=app.run(`combineTemplate([],savedMeals[0],{currency:'VND'})`);assert.equal(result.items[0].price,0);
  app.run('openTemplateImport(savedMeals[0])');assert(app.nodes['import-currency'].textContent.includes('chưa rõ tiền tệ'));
+});
+
+test('donation QR exists before configuration loads and failed external images use the bundled QR',async()=>{
+ const html=fs.readFileSync('dist/index.html','utf8');
+ assert(html.includes('<div id="coffee-qr"><img src="/bank-qr.jpg"'));
+ assert(html.includes('id="coffee-qr-open"'));
+ const app=await ui();
+ assert.equal(app.nodes['coffee-qr'].children[0].src,'/bank-qr.jpg');
+ app.run(`premiumConfig.coffeeQrImage='https://example.com/unavailable.jpg';renderCoffeeQr();`);
+ const image=app.nodes['coffee-qr'].children[0];image.onerror();
+ assert.equal(image.src,'/bank-qr.jpg');assert.equal(app.nodes['coffee-qr-open'].href,'/bank-qr.jpg');
+ image.onerror();assert.equal(app.nodes['coffee-missing'].hidden,false);
+ image.onload();assert.equal(app.nodes['coffee-missing'].hidden,true);
 });

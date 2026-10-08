@@ -57,7 +57,9 @@ function renderPremium(){
  $('premium-signin').hidden=Boolean(premiumConfig?.signedIn);$('premium-signin').textContent=tr('Sign in with ChatGPT','Đăng nhập bằng ChatGPT');
  $('premium-signin').href='/signin-with-chatgpt?return_to='+encodeURIComponent('/?tab=premium');
  $('premium-availability').textContent=premiumConfig?(!premiumConfig.checkoutReady?tr('PayPal checkout is being prepared.','Thanh toán PayPal đang được chuẩn bị.'):premiumConfig.environment==='sandbox'?tr('Sandbox checkout: test payments only.','Chế độ thử nghiệm: không thu tiền thật.'):''):tr('Loading payment options…','Đang tải phương thức thanh toán…');
- $('coffee-missing').hidden=Boolean(premiumConfig?.coffeeUrl||premiumConfig?.coffeeQrImage);$('coffee-missing').textContent=tr('The donation QR is being prepared.','Mã QR ủng hộ đang được chuẩn bị.');
+ $('coffee-qr-open').textContent=tr('Open full-size QR','Mở mã QR kích thước lớn');
+ $('coffee-missing').hidden=Boolean($('coffee-qr').querySelector('img,svg'));
+ if($('coffee-missing').hidden)$('coffee-missing').textContent='';
  $('coffee-link').hidden=!premiumConfig?.coffeeUrl;
  $('coffee-details').textContent=premiumConfig?.coffeeDetails||'';
  if(premiumConfig?.coffeeUrl)$('coffee-link').href=premiumConfig.coffeeUrl;
@@ -68,8 +70,18 @@ function renderPremium(){
 }
 function renderCoffeeQr(){
  $('coffee-qr').replaceChildren();
- if(premiumConfig?.coffeeQrImage){const img=document.createElement('img');img.src=premiumConfig.coffeeQrImage;img.alt=tr('Bank donation QR','Mã QR ngân hàng để ủng hộ');img.onerror=()=>{$('coffee-qr').replaceChildren();$('coffee-missing').hidden=false;$('coffee-missing').textContent=tr('Unable to load this QR. Please try again later.','Chưa tải được mã QR. Vui lòng thử lại sau.')};$('coffee-qr').append(img)}
- else if(premiumConfig?.coffeeUrl){try{const qr=qrcode(0,'M');qr.addData(premiumConfig.coffeeUrl);qr.make();$('coffee-qr').innerHTML=qr.createSvgTag({cellSize:4,margin:16,scalable:true});$('coffee-qr').setAttribute('aria-label',tr('Scan to open the donation page','Quét mã để mở trang ủng hộ'))}catch{$('coffee-missing').hidden=false}}
+ if(premiumConfig?.coffeeQrImage||!premiumConfig?.coffeeUrl){
+  const source=premiumConfig?.coffeeQrImage||'/bank-qr.jpg';
+  const img=document.createElement('img');img.src=source;img.alt=tr('Bank donation QR','Mã QR ngân hàng để ủng hộ');img.width=603;img.height=705;
+  $('coffee-qr-open').href=source;$('coffee-qr-open').hidden=false;
+  img.onerror=()=>{
+   if(img.getAttribute('src')!=='/bank-qr.jpg'){img.src='/bank-qr.jpg';$('coffee-qr-open').href='/bank-qr.jpg';return}
+   $('coffee-missing').hidden=false;$('coffee-missing').textContent=tr('QR could not load. Open the full-size image or reload this page.','Chưa tải được QR. Hãy mở ảnh kích thước lớn hoặc tải lại trang.');
+  };
+  img.onload=()=>{$('coffee-missing').hidden=true;$('coffee-missing').textContent=''};
+  $('coffee-qr').append(img);$('coffee-missing').hidden=true;
+ }
+ else if(premiumConfig?.coffeeUrl){$('coffee-qr-open').hidden=true;try{const qr=qrcode(0,'M');qr.addData(premiumConfig.coffeeUrl);qr.make();$('coffee-qr').innerHTML=qr.createSvgTag({cellSize:4,margin:16,scalable:true});$('coffee-qr').setAttribute('aria-label',tr('Scan to open the donation page','Quét mã để mở trang ủng hộ'));$('coffee-missing').hidden=true}catch{$('coffee-missing').hidden=false;$('coffee-missing').textContent=tr('Unable to generate QR. Open the donation page below.','Chưa tạo được QR. Hãy mở trang ủng hộ bên dưới.')}}
 }
 async function refreshTemplates(){
  const meals=await premiumApi('/api/templates');savedMeals=meals.templates;renderPremium();

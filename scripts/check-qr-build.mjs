@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import worker from '../dist/server/index.js';
+const origin='https://basket.example';
+const config=await (await worker.fetch(new Request(origin+'/api/config'),{})).json();
+assert.equal(config.coffeeQrImage,'/bank-qr.jpg');
+const response=await worker.fetch(new Request(origin+config.coffeeQrImage),{});
+assert.equal(response.status,200);
+assert.equal(response.headers.get('content-type'),'image/jpeg');
+assert.deepEqual(Buffer.from(await response.arrayBuffer()),fs.readFileSync('public/bank-qr.jpg'));
+const page=await (await worker.fetch(new Request(origin),{})).text();
+assert(page.includes('<div id="coffee-qr"><img src="/bank-qr.jpg"'));
+console.log('Verified built QR route, JPEG content, exact image bytes, and initial page image.');
