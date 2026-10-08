@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
+const {version}=JSON.parse(fs.readFileSync('package.json','utf8'));
+if(!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version))throw Error('package.json must contain a valid semantic version.');
 const donation=JSON.parse(fs.readFileSync('public/coffee-account.json','utf8'));
 const qrImage='data:image/jpeg;base64,'+fs.readFileSync('public/bank-qr.jpg').toString('base64');
 fs.writeFileSync('dist/coffee-bank.js',`const BANK_DONATION=${JSON.stringify({...donation,qrImage})};\n`);
@@ -13,6 +15,7 @@ for(const filename of fs.readdirSync('dist')){
 const escapeText=value=>String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 assets['/index.html'].body=assets['/index.html'].body.replace('<div id="coffee-qr"></div>',`<div id="coffee-qr"><img src="${qrImage}" alt="VietQR — ${escapeAttribute(donation.bank)} ${escapeAttribute(donation.account)}"></div>`);
 assets['/index.html'].body=assets['/index.html'].body.replace('<p id="coffee-details"></p>',`<p id="coffee-details">Ngân hàng: ${escapeText(donation.bank)}\nSố tài khoản: ${escapeText(donation.account)}${donation.owner?'\nChủ tài khoản: '+escapeText(donation.owner):''}</p>`);
+assets['/index.html'].body=assets['/index.html'].body.replace(/(<span id="app-version">)v[^<]*(<\/span>)/,`$1v${version}$2`);
 const source=fs.readFileSync('worker/index.mjs','utf8');
 const imageTypes={'.jpg':'image/jpeg','.jpeg':'image/jpeg','.png':'image/png','.webp':'image/webp','.gif':'image/gif','.svg':'image/svg+xml'};
 function addPublicImages(folder,relative=''){

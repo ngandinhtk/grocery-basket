@@ -47,11 +47,12 @@ test('signed-in users share a grocery list through a one-time household invite',
  assert.equal((await response.json()).householdId,created.household.id);
  assert.equal((await worker.fetch(request('/api/household/join','POST',{token:invite.token},'carol'),env)).status,410);
 
- const rice={id:'rice-1',name:'Rice',category:'Pantry',qty:1,price:2,unit:'',done:false,actualPrice:2.5,actualCurrency:'USD'};
+ const rice={id:'rice-1',name:'Rice',category:'Pantry',qty:1,price:2,priceCurrency:'USD',unit:'',done:false,actualPrice:2.5,actualCurrency:'USD'};
  response=await worker.fetch(request('/api/household/items','POST',{upsert:[rice],delete:[]}),env);
  assert.equal(response.status,200);
  assert.deepEqual((await response.json()).items,[rice]);
  assert.equal((await worker.fetch(request('/api/household/items','POST',{upsert:[{...rice,actualCurrency:'XXX'}],delete:[]}),env)).status,400);
+ assert.equal((await worker.fetch(request('/api/household/items','POST',{upsert:[{...rice,priceCurrency:'XXX'}],delete:[]}),env)).status,400);
  response=await worker.fetch(request('/api/household/items','GET',undefined,'bob'),env);
  assert.deepEqual((await response.json()).items,[rice]);
 
@@ -69,4 +70,60 @@ test('signed-in users share a grocery list through a one-time household invite',
  assert.deepEqual(await (await worker.fetch(request('/api/household','GET',undefined,'bob'),env)).json(),{household:null,items:[]});
  assert.equal((await worker.fetch(request('/api/household','DELETE',{},'alice'),env)).status,200);
  assert.deepEqual(await (await worker.fetch(request('/api/household','GET'),env)).json(),{household:null,items:[]});
+});
+
+test('Google OAuth creates a verified session that can access household APIs and sign out',async t=>{
+ const DB=database(),env={DB,GOOGLE_CLIENT_ID:'client-id',GOOGLE_CLIENT_SECRET:'client-secret'};
+ const originalFetch=globalThis.fetch;
+ globalThis.fetch=async(url,options={})=>{
+  if(url==='https://oauth2.googleapis.com/token'){
+   const form=new URLSearchParams(options.body);assert.equal(form.get('client_id'),'client-id');assert.equal(form.get('code_verifier').length,64);assert.equal(form.get('redirect_uri'),origin+'/auth/google/callback');
+   return Response.json({access_token:'google-access-token'});
+  }
+  if(url==='https://openidconnect.googleapis.com/v1/userinfo'){
+   assert.equal(options.headers.Authorization,'Bearer google-access-token');
+   return Response.json({sub:'google-sub-1',email:'member@example.com',email_verified:true});
+  }
+  throw Error('Unexpected OAuth URL');
+ };
+ t.after(()=>{globalThis.fetch=originalFetch;DB.sql.close()});
+ let response=await worker.fetch(new Request(origin+'/auth/google/start?return_to=%2F%3Finvite%3D'+('A'.repeat(43))),env);
+ assert.equal(response.status,302);
+ const authorize=new URL(response.headers.get('Location'));
+ assert.equal(authorize.origin,'https://accounts.google.com');
+ assert.equal(authorize.searchParams.get('code_challenge_method'),'S256');
+ const state=authorize.searchParams.get('state');
+ response=await worker.fetch(new Request(origin+'/auth/google/callback?code=auth-code&state='+state),env);
+ assert.equal(response.status,302);
+ assert.equal(new URL(response.headers.get('Location')).searchParams.get('invite'),'A'.repeat(43));
+ const cookie=response.headers.get('Set-Cookie');
+ assert.match(cookie,/HttpOnly/);assert.match(cookie,/SameSite=Lax/);assert.match(cookie,/Secure/);
+ const sessionCookie=cookie.split(';')[0];
+ response=await worker.fetch(new Request(origin+'/api/household',{headers:{Cookie:sessionCookie}}),env);
+ assert.equal(response.status,200);assert.deepEqual(await response.json(),{household:null,items:[]});
+ response=await worker.fetch(new Request(origin+'/api/household',{method:'POST',headers:{Cookie:sessionCookie,Origin:origin,'Content-Type':'application/json'},body:'{}'}),env);
+ assert.equal(response.status,201);
+ response=await worker.fetch(new Request(origin+'/auth/google/logout',{method:'POST',headers:{Cookie:sessionCookie,Origin:origin}}),env);
+ assert.equal(response.status,303);assert.match(response.headers.get('Set-Cookie'),/Max-Age=0/);
+ response=await worker.fetch(new Request(origin+'/api/household',{headers:{Cookie:sessionCookie}}),env);
+ assert.equal(response.status,401);
+});
+
+test('Google OAuth rejects invalid state, unverified email, and cross-origin logout',async t=>{
+ const DB=database(),env={DB,GOOGLE_CLIENT_ID:'client-id',GOOGLE_CLIENT_SECRET:'client-secret'};
+ const originalFetch=globalThis.fetch;
+ globalThis.fetch=async url=>url==='https://oauth2.googleapis.com/token'?Response.json({access_token:'token'}):Response.json({sub:'google-sub-2',email:'unverified@example.com',email_verified:false});
+ t.after(()=>{globalThis.fetch=originalFetch;DB.sql.close()});
+ let response=await worker.fetch(new Request(origin+'/auth/google/callback?code=auth-code&state=unknown'),env);
+ assert.equal(new URL(response.headers.get('Location')).searchParams.get('auth_error'),'google_state');
+ response=await worker.fetch(new Request(origin+'/auth/google/start'),env);
+ const state=new URL(response.headers.get('Location')).searchParams.get('state');
+ response=await worker.fetch(new Request(origin+'/auth/google/callback?code=auth-code&state='+state),env);
+ assert.equal(new URL(response.headers.get('Location')).searchParams.get('auth_error'),'google_email');
+ response=await worker.fetch(new Request(origin+'/auth/google/callback?error=access_denied'),env);
+ assert.equal(new URL(response.headers.get('Location')).searchParams.get('auth_error'),'google_cancelled');
+ response=await worker.fetch(new Request(origin+'/auth/google/logout',{method:'POST',headers:{Origin:'https://attacker.example'}}),env);
+ assert.equal(response.status,403);
+ response=await worker.fetch(new Request(origin+'/auth/google/start'),{DB});
+ assert.equal(new URL(response.headers.get('Location')).searchParams.get('auth_error'),'google_not_configured');
 });

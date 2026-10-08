@@ -1,8 +1,9 @@
 let household=null,householdItems=[],householdLinked=false,householdBusy=false,householdStatus='',inviteUrl='';
+const householdFeatureEnabled=false;
 const householdInvite=new URLSearchParams(window.location.search).get('invite');
 const householdCard=document.createElement('section');
-householdCard.id='household-card';householdCard.className='household-card';
-householdCard.innerHTML=`<div class="household-heading"><div><div class="eyebrow" id="household-kicker"></div><h2 id="household-title"></h2></div><span id="household-count" class="pill" hidden></span></div><p id="household-description"></p><p id="household-status" role="status"></p><div id="household-local"><a id="household-signin" class="primary"></a><div id="household-local-actions" hidden><p id="household-join-note"></p><button id="household-create" class="primary" type="button"></button><form id="household-join-form"><label for="household-token" id="household-token-label"></label><input id="household-token" autocomplete="off" maxlength="50" required><button id="household-join" class="outline" type="submit"></button></form></div></div><div id="household-shared" hidden><p id="household-members"></p><p id="household-merge-note"></p><button id="household-link-device" class="primary" type="button" hidden></button><div id="household-invite-actions"><button id="household-invite-create" class="outline" type="button"></button><div id="household-invite-link" hidden><label for="household-url" id="household-url-label"></label><input id="household-url" readonly><div class="household-actions"><button id="household-share" class="primary" type="button"></button><button id="household-copy" class="outline" type="button"></button></div><small id="household-invite-expiry"></small></div></div><button id="household-leave" class="text-button" type="button"></button><button id="household-dissolve" class="text-button" type="button" hidden></button></div>`;
+householdCard.id='household-card';householdCard.className='household-card';householdCard.hidden=!householdFeatureEnabled;
+householdCard.innerHTML=`<div class="household-heading"><div><div class="eyebrow" id="household-kicker"></div><h2 id="household-title"></h2></div><span id="household-count" class="pill" hidden></span></div><p id="household-description"></p><p id="household-status" role="status"></p><button id="household-signout" class="text-button" type="button" hidden></button><div id="household-local"><a id="household-signin" class="primary"></a><div id="household-local-actions" hidden><p id="household-join-note"></p><button id="household-create" class="primary" type="button"></button><form id="household-join-form"><label for="household-token" id="household-token-label"></label><input id="household-token" autocomplete="off" maxlength="50" required><button id="household-join" class="outline" type="submit"></button></form></div></div><div id="household-shared" hidden><p id="household-members"></p><p id="household-merge-note"></p><button id="household-link-device" class="primary" type="button" hidden></button><div id="household-invite-actions"><button id="household-invite-create" class="outline" type="button"></button><div id="household-invite-link" hidden><label for="household-url" id="household-url-label"></label><input id="household-url" readonly><div class="household-actions"><button id="household-share" class="primary" type="button"></button><button id="household-copy" class="outline" type="button"></button></div><small id="household-invite-expiry"></small></div></div><button id="household-leave" class="text-button" type="button"></button><button id="household-dissolve" class="text-button" type="button" hidden></button></div>`;
 document.getElementById('shopping-panel').append(householdCard);
 
 const householdText={
@@ -10,6 +11,12 @@ const householdText={
  title:['Share a household grocery list','Chia sẻ danh sách đi chợ trong gia đình'],
  description:['Invite signed-in family members to keep one grocery list in sync.','Mời người thân đã đăng nhập cùng cập nhật một danh sách đi chợ.'],
  signIn:['Sign in to create or join a household','Đăng nhập để tạo hoặc tham gia hộ gia đình'],
+ signOut:['Sign out of this device','Đăng xuất khỏi thiết bị này'],
+ googleNotConfigured:['Google sign-in is not configured for this website yet.','Website chưa được cấu hình đăng nhập Google.'],
+ googleFailed:['Google could not complete sign-in. Please try again.','Không thể hoàn tất đăng nhập Google. Vui lòng thử lại.'],
+ googleEmail:['Use a Google account with a verified email address.','Hãy dùng tài khoản Google có email đã xác minh.'],
+ googleState:['This sign-in link expired or was already used. Start again.','Liên kết đăng nhập đã hết hạn hoặc đã được dùng. Hãy bắt đầu lại.'],
+ googleCancelled:['Google sign-in was cancelled.','Bạn đã hủy đăng nhập Google.'],
  inviteSignIn:['Sign in to accept this household invite. Your local list will only be shared after you confirm the join.','Đăng nhập để nhận lời mời. Danh sách trên thiết bị chỉ được chia sẻ sau khi bạn xác nhận tham gia.'],
  joinReady:['Invite ready. Joining merges this device’s current grocery list with the household list.','Lời mời đã sẵn sàng. Khi tham gia, danh sách hiện tại sẽ được gộp vào danh sách chung.'],
  create:['Create a household and share this device’s list','Tạo hộ gia đình và chia sẻ danh sách trên thiết bị này'],
@@ -56,7 +63,9 @@ function renderHouseholdText(){
  $('household-invite-create').textContent=householdTr('invite');$('household-share').textContent=householdTr('share');$('household-copy').textContent=householdTr('copy');$('household-url-label').textContent=householdTr('urlLabel');
  $('household-invite-expiry').textContent=householdTr('expiry');$('household-leave').textContent=householdTr('leave');$('household-dissolve').textContent=householdTr('dissolve');$('household-link-device').textContent=householdTr('merge');
  if(household){$('household-members').textContent=householdTr('members',{count:household.memberCount});$('household-count').textContent=householdTr('members',{count:household.memberCount})}
- $('household-signin').href='/signin-with-chatgpt?return_to='+encodeURIComponent(householdInvite?'/?invite='+householdInvite:'/?tab=shopping');
+ $('household-signin').href='/auth/google/start?return_to='+encodeURIComponent(householdInvite?'/?invite='+householdInvite:'/?tab=shopping');
+ $('household-signin').textContent=householdTr('signIn').replace('Sign in','Sign in with Google').replace('Đăng nhập','Đăng nhập bằng Google');
+ $('household-signout').textContent=householdTr('signOut');
 }
 async function householdApi(path,method='GET',body){
  const response=await fetch(path,{method,credentials:'same-origin',headers:method==='GET'?{}:{'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
@@ -69,10 +78,10 @@ function householdError(error){
  return householdTr(errors[error.message]||'unknown');
 }
 function normalizeHouseholdItems(items){
- return items.map(item=>({...item,id:typeof item.id==='string'&&item.id?item.id:crypto.randomUUID(),unit:item.unit||'',done:Boolean(item.done)}));
+ return items.map(item=>({...item,id:typeof item.id==='string'&&item.id?item.id:crypto.randomUUID(),unit:item.unit||'',priceCurrency:['USD','VND','EUR','GBP'].includes(item.priceCurrency)?item.priceCurrency:state.currency,done:Boolean(item.done)}));
 }
 function householdItemEqual(a,b){
- return ['id','name','category','qty','price','unit','done','actualPrice','actualCurrency'].every(key=>(a[key]??(key==='unit'?'':undefined))===(b[key]??(key==='unit'?'':undefined)));
+ return ['id','name','category','qty','price','priceCurrency','unit','done','actualPrice','actualCurrency'].every(key=>(a[key]??(key==='unit'?'':undefined))===(b[key]??(key==='unit'?'':undefined)));
 }
 function householdDiff(before,after){
  const previous=new Map(before.map(item=>[item.id,item])),next=new Map(after.map(item=>[item.id,item]));
@@ -98,6 +107,7 @@ function renderHousehold(){
  $('household-local').hidden=Boolean(household);
  $('household-shared').hidden=!household;
  $('household-local-actions').hidden=!householdSignedIn;
+ $('household-signout').hidden=!householdSignedIn;
  $('household-signin').hidden=householdSignedIn;
  $('household-join-note').hidden=!householdSignedIn;
  $('household-count').hidden=!household;
@@ -107,7 +117,7 @@ function renderHousehold(){
  $('household-leave').hidden=!household||household.isOwner;
  $('household-dissolve').hidden=!household||!household.isOwner;
  $('household-invite-link').hidden=!inviteUrl;
- $('household-invite-url').value=inviteUrl;
+ $('household-url').value=inviteUrl;
 }
 let householdSignedIn=false;
 function ensureHouseholdIds(){
@@ -156,13 +166,15 @@ async function activateHousehold(data,{mergeLocal=false,status='synced'}={}){
 }
 async function loadHousehold(){
  ensureHouseholdIds();
+ const authError=new URLSearchParams(window.location.search).get('auth_error'),authErrorKey={google_not_configured:'googleNotConfigured',google_failed:'googleFailed',google_email:'googleEmail',google_state:'googleState',google_cancelled:'googleCancelled'}[authError];
  try{
   const data=await householdApi('/api/household');
   householdSignedIn=true;
   if(!data.household){
    household=null;householdLinked=false;
    if(householdInvite)$('household-token').value=householdInvite;
-   if(householdInvite)showHouseholdStatus('joinReady');
+   if(authErrorKey)showHouseholdStatus(authErrorKey);
+   else if(householdInvite)showHouseholdStatus('joinReady');
    else showHouseholdStatus('localOnly');
    renderHousehold();return;
   }
@@ -178,7 +190,7 @@ async function loadHousehold(){
   }
  }catch(error){
   householdSignedIn=false;household=null;householdLinked=false;
-  showHouseholdStatus(error.message==='SIGN_IN_REQUIRED'?(householdInvite?'inviteSignIn':'localOnly'):'unknown');
+  showHouseholdStatus(authErrorKey|| (error.message==='SIGN_IN_REQUIRED'?(householdInvite?'inviteSignIn':'localOnly'):'unknown'));
   renderHousehold();
  }
 }
@@ -204,16 +216,16 @@ async function shareHouseholdInvite(){
  try{
   if(typeof navigator.share==='function')await navigator.share({title:householdTr('title'),text:householdTr('expiry'),url:inviteUrl});
   else if(navigator.clipboard?.writeText){await navigator.clipboard.writeText(inviteUrl);showHouseholdStatus('copied')}
-  else{$('household-invite-url').focus();$('household-invite-url').select();showHouseholdStatus('copyFailed')}
+  else{$('household-url').focus();$('household-url').select();showHouseholdStatus('copyFailed')}
  }catch(error){
   if(error.name==='AbortError'){showHouseholdStatus('inviteCancelled');return}
   try{await navigator.clipboard.writeText(inviteUrl);showHouseholdStatus('copied')}
-  catch{$('household-invite-url').focus();$('household-invite-url').select();showHouseholdStatus('copyFailed')}
+  catch{$('household-url').focus();$('household-url').select();showHouseholdStatus('copyFailed')}
  }
 }
 async function copyHouseholdInvite(){
  try{await navigator.clipboard.writeText(inviteUrl);showHouseholdStatus('copied')}
- catch{$('household-invite-url').focus();$('household-invite-url').select();showHouseholdStatus('copyFailed')}
+ catch{$('household-url').focus();$('household-url').select();showHouseholdStatus('copyFailed')}
 }
 async function leaveHousehold(){
  const endpoint=household.isOwner?'/api/household':'/api/household/leave';
@@ -223,6 +235,7 @@ async function leaveHousehold(){
  }catch(error){showHouseholdStatus(householdError(error),true)}
 }
 $('household-create').addEventListener('click',createHousehold);
+$('household-signout').addEventListener('click',async()=>{try{const response=await fetch('/auth/google/logout',{method:'POST',credentials:'same-origin'});if(!response.ok)throw Error('SIGN_OUT_FAILED');window.location.assign('/?tab=shopping')}catch{showHouseholdStatus('unknown')}});
 $('household-join-form').addEventListener('submit',event=>{event.preventDefault();const token=$('household-token').value.trim().match(/[?&]invite=([A-Za-z0-9_-]{40,50})/)?.[1]||$('household-token').value.trim();return joinHousehold(token)});
 $('household-link-device').addEventListener('click',async()=>{if(!household)return;await activateHousehold({household,items:householdItems},{mergeLocal:true,status:'merged'})});
 $('household-invite-create').addEventListener('click',createHouseholdInvite);
@@ -234,5 +247,7 @@ const renderBeforeHousehold=render;
 render=function(){renderBeforeHousehold();renderHousehold()};
 const saveBeforeHousehold=save;
 save=function(){saveBeforeHousehold();if(householdLinked)syncHousehold()};
-renderHouseholdText();renderHousehold();loadHousehold();
-setInterval(()=>{if(document.visibilityState!=='hidden')refreshHousehold()},10000);
+if(householdFeatureEnabled){
+ renderHouseholdText();renderHousehold();loadHousehold();
+ setInterval(()=>{if(document.visibilityState!=='hidden')refreshHousehold()},10000);
+}

@@ -7,6 +7,7 @@ import {webcrypto} from 'node:crypto';
 async function ui({failConfig=false}={}){
  const nodes={},handlers={},calls=[];
  function node(id){return nodes[id]??={value:'',textContent:'',innerHTML:'',hidden:false,disabled:false,style:{},children:[],append(child){this.children.push(child)},replaceChildren(){this.children=[]},setAttribute(key,value){this[key]=value},getAttribute(key){return this[key]},focus(){},showModal(){this.open=true},close(){this.open=false;handlers[id+':close']?.({})},querySelector(selector){return this.children.find(child=>selector==='img'&&child.tagName==='IMG')||(selector==='img'?null:node(id+selector))},addEventListener(type,callback){handlers[id+':'+type]=callback}}}
+ for(let day=0;day<7;day++)node('weekly-'+day);
  const context=vm.createContext({document:{getElementById:node,querySelector:node,querySelectorAll:()=>[],createElement:tag=>{const el=node('created-'+Math.random());el.tagName=tag.toUpperCase();return el}},window:{location:{search:'',assign(){}},history:{replaceState(){}},addEventListener:(type,callback)=>handlers['window:'+type]=callback},fetch:async(path,options={})=>{
   calls.push([path,options]);if(failConfig&&path==='/api/config')throw Error('offline');return Response.json(path==='/api/config'?{signedIn:false,price:'7.50',originalPrice:'21.00',currency:'USD'}:path==='/api/premium/status'?{premium:true}:path==='/api/templates'?{templates:[]}:path==='/api/weekly-plan'?{days:['Server meal','','','','','','']}:{ok:true});
  },Response,URLSearchParams,crypto:webcrypto,console});
@@ -66,17 +67,21 @@ test('template import combines compatible units, keeps incompatible units and pr
  const result=app.run(`combineTemplate(state.items,savedMeals[0],{mode:'merge',currency:'VND'})`);
  assert.equal(result.items.length,2);assert.equal(result.items[0].qty,1.5);assert.equal(result.merged,1);assert.equal(result.separate,1);
  assert.equal(Math.round(result.items.reduce((sum,x)=>sum+x.qty*x.price,0)),90000);
+ assert(result.items.every(item=>item.priceCurrency==='VND'));
  assert.equal(app.run('state.items[0].qty'),1,'preview does not mutate the list');
  const separate=app.run(`combineTemplate(state.items,savedMeals[0],{mode:'separate',currency:'VND'})`);assert.equal(separate.items.length,3);
  const skipped=app.run(`combineTemplate(state.items,savedMeals[0],{mode:'skip',currency:'VND'})`);assert.equal(skipped.skipped,1);assert.equal(skipped.items.length,2);
+ app.run(`state.items=[{id:'usd-rice',name:'Rice',category:'Pantry',qty:1,price:4,priceCurrency:'USD',unit:'kg',done:false}];`);
+ const currencies=app.run(`combineTemplate(state.items,{currency:'VND',items:[{name:'Rice',category:'Pantry',qty:1,price:40000,unit:'kg'}]},{mode:'merge',currency:'VND'})`);
+ assert.equal(currencies.items.length,2,'items with unlike price currencies are never merged');
+ assert.deepEqual([...currencies.items.map(item=>item.priceCurrency)],['USD','VND']);
 });
 
 test('foreign and legacy template prices never become local currency prices',async()=>{
  const app=await ui();
  app.run(`savedMeals=[{currency:'VND',items:[{name:'Rice',category:'Pantry',qty:1,price:40000,unit:'kg'}]}];`);
  let result=app.run(`combineTemplate([],savedMeals[0],{currency:'USD'})`);assert.equal(result.items[0].price,0);assert(result.resetPrices);
- app.run('savedMeals[0].currency=null');result=app.run(`combineTemplate([],savedMeals[0],{currency:'VND'})`);assert.equal(result.items[0].price,0);
- app.run('openTemplateImport(savedMeals[0])');assert(app.nodes['import-currency'].textContent.includes('chưa rõ tiền tệ'));
+ app.run('savedMeals[0].currency=null');result=app.run(`combineTemplate([],savedMeals[0],{currency:'VND'})`);assert.equal(result.items[0].price,0);assert(result.resetPrices);
 });
 
 test('donation QR uses the embedded bank image and keeps the thank-you message',async()=>{

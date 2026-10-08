@@ -5,11 +5,93 @@ const json=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:
 class ApiError extends Error{constructor(code,status=400){super(code);this.status=status}}
 const VERIFY_INTERVAL=5*60*1000,VERIFIED_GRACE=24*60*60*1000;
 const MAX_HOUSEHOLD_MEMBERS=10,MAX_HOUSEHOLD_CHANGES=200,INVITE_LIFETIME=7*24*60*60*1000;
+const GOOGLE_STATE_LIFETIME=10*60*1000,GOOGLE_SESSION_LIFETIME=30*24*60*60*1000;
 const paypalEnv=env=>env.PAYPAL_ENV==='live'?'live':'sandbox';
 function configured(env){return Boolean(env.PAYPAL_CLIENT_ID&&env.PAYPAL_CLIENT_SECRET&&['live','sandbox'].includes(env.PAYPAL_ENV))}
 function checkoutEnabled(env){return env.PAYPAL_CHECKOUT_ENABLED==='true'&&configured(env)}
 function safeHttps(value){try{const u=new URL(value);return u.protocol==='https:'&&!u.username&&!u.password&&u.href.length<1800?u.href:null}catch{return null}}
 function coffeeUrl(env){return safeHttps(env.COFFEE_URL)}
+function base64Url(bytes){let binary='';for(const byte of bytes)binary+=String.fromCharCode(byte);return btoa(binary).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}
+function randomToken(size=32){const bytes=crypto.getRandomValues(new Uint8Array(size));return base64Url(bytes)}
+async function sha256(value){const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value));return Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,'0')).join('')}
+function safeReturnPath(value){
+ if(typeof value!=='string'||!value.startsWith('/')||value.startsWith('//')||value.includes('\\')||/[\u0000-\u001f\u007f]/.test(value))return '/?tab=shopping';
+ return value;
+}
+function authRedirect(origin,path,error){
+ const target=new URL(path,origin);if(error)target.searchParams.set('auth_error',error);
+ return new Response(null,{status:302,headers:{Location:target.href,'Cache-Control':'no-store','Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff'}});
+}
+function cookieValue(request,name){
+ const cookies=request.headers.get('Cookie')||'';
+ for(const part of cookies.split(';')){const separator=part.indexOf('=');if(separator>=0&&part.slice(0,separator).trim()===name)return part.slice(separator+1).trim()}
+ return null;
+}
+async function authenticatedUser(request,env){
+ const hostUser=request.headers.get('oai-authenticated-user-id');if(hostUser)return hostUser;
+ const token=cookieValue(request,'basket_session');if(!token||!env.DB||!/^[A-Za-z0-9_-]{40,60}$/.test(token))return null;
+ const session=await env.DB.prepare('SELECT user_id FROM google_sessions WHERE token_hash = ? AND expires_at > ?').bind(await sha256(token),new Date().toISOString()).first();
+ return session?`google:${session.user_id}`:null;
+}
+async function googleAuth(request,env){
+ const url=new URL(request.url),path=url.pathname;
+ if(path==='/auth/google/start'){
+  if(request.method!=='GET')return json({error:'METHOD_NOT_ALLOWED'},405);
+  const returnTo=safeReturnPath(url.searchParams.get('return_to'));
+  if(!env.DB||!env.GOOGLE_CLIENT_ID||!env.GOOGLE_CLIENT_SECRET)return authRedirect(url.origin,returnTo,'google_not_configured');
+  const state=randomToken(),verifier=randomToken(48),now=Date.now(),expires=new Date(now+GOOGLE_STATE_LIFETIME).toISOString();
+  await env.DB.prepare('DELETE FROM google_oauth_states WHERE expires_at <= ?').bind(new Date(now).toISOString()).run();
+  await env.DB.prepare('INSERT INTO google_oauth_states (state_hash,code_verifier,return_to,expires_at) VALUES (?,?,?,?)').bind(await sha256(state),verifier,returnTo,expires).run();
+  const redirectUri=new URL('/auth/google/callback',url.origin).href,challenge=base64Url(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(verifier))));
+  const authorize=new URL('https://accounts.google.com/o/oauth2/v2/auth');
+  authorize.search=new URLSearchParams({client_id:env.GOOGLE_CLIENT_ID,redirect_uri:redirectUri,response_type:'code',scope:'openid email profile',state,code_challenge:challenge,code_challenge_method:'S256'}).toString();
+  return new Response(null,{status:302,headers:{Location:authorize.href,'Cache-Control':'no-store','Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff'}});
+ }
+ if(path==='/auth/google/callback'){
+  if(request.method!=='GET')return json({error:'METHOD_NOT_ALLOWED'},405);
+  if(url.searchParams.get('error')==='access_denied')return authRedirect(url.origin,'/?tab=shopping','google_cancelled');
+  const state=url.searchParams.get('state'),code=url.searchParams.get('code');
+  if(!state||!code||!env.DB||!env.GOOGLE_CLIENT_ID||!env.GOOGLE_CLIENT_SECRET)return authRedirect(url.origin,'/?tab=shopping','google_failed');
+  const stateHash=await sha256(state),now=new Date().toISOString();
+  const oauthState=await env.DB.prepare('SELECT code_verifier,return_to FROM google_oauth_states WHERE state_hash = ? AND expires_at > ?').bind(stateHash,now).first();
+  if(!oauthState)return authRedirect(url.origin,'/?tab=shopping','google_state');
+  const claimed=await env.DB.prepare('DELETE FROM google_oauth_states WHERE state_hash = ? AND expires_at > ?').bind(stateHash,now).run();
+  if(!claimed.meta.changes)return authRedirect(url.origin,oauthState.return_to,'google_state');
+  const redirectUri=new URL('/auth/google/callback',url.origin).href;
+  let tokenResponse;
+  try{tokenResponse=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({client_id:env.GOOGLE_CLIENT_ID,client_secret:env.GOOGLE_CLIENT_SECRET,code,code_verifier:oauthState.code_verifier,grant_type:'authorization_code',redirect_uri:redirectUri}),signal:AbortSignal.timeout(15000)})}
+  catch{return authRedirect(url.origin,oauthState.return_to,'google_failed')}
+  if(!tokenResponse.ok)return authRedirect(url.origin,oauthState.return_to,'google_failed');
+  let token;
+  try{token=await tokenResponse.json()}catch{return authRedirect(url.origin,oauthState.return_to,'google_failed')}
+  if(typeof token.access_token!=='string')return authRedirect(url.origin,oauthState.return_to,'google_failed');
+  let profileResponse;
+  try{profileResponse=await fetch('https://openidconnect.googleapis.com/v1/userinfo',{headers:{Authorization:`Bearer ${token.access_token}`},signal:AbortSignal.timeout(15000)})}
+  catch{return authRedirect(url.origin,oauthState.return_to,'google_failed')}
+  if(!profileResponse.ok)return authRedirect(url.origin,oauthState.return_to,'google_failed');
+  let profile;
+  try{profile=await profileResponse.json()}catch{return authRedirect(url.origin,oauthState.return_to,'google_failed')}
+  if(typeof profile.sub!=='string'||!profile.sub||typeof profile.email!=='string'||profile.email_verified!==true)return authRedirect(url.origin,oauthState.return_to,'google_email');
+  const timestamp=new Date().toISOString(),userId=crypto.randomUUID();
+  await env.DB.prepare('INSERT INTO google_users (id,google_sub,email,created_at,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(google_sub) DO UPDATE SET email = excluded.email, updated_at = excluded.updated_at').bind(userId,profile.sub,profile.email,timestamp,timestamp).run();
+  const user=await env.DB.prepare('SELECT id FROM google_users WHERE google_sub = ?').bind(profile.sub).first();
+  if(!user)return authRedirect(url.origin,oauthState.return_to,'google_failed');
+  const sessionToken=randomToken(),sessionExpires=new Date(Date.now()+GOOGLE_SESSION_LIFETIME).toISOString();
+  await env.DB.prepare('DELETE FROM google_sessions WHERE expires_at <= ?').bind(timestamp).run();
+  await env.DB.prepare('INSERT INTO google_sessions (token_hash,user_id,expires_at,created_at) VALUES (?,?,?,?)').bind(await sha256(sessionToken),user.id,sessionExpires,timestamp).run();
+  const cookie=`basket_session=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${GOOGLE_SESSION_LIFETIME/1000}${url.protocol==='https:'?'; Secure':''}`;
+  return new Response(null,{status:302,headers:{Location:new URL(oauthState.return_to,url.origin).href,'Set-Cookie':cookie,'Cache-Control':'no-store','Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff'}});
+ }
+ if(path==='/auth/google/logout'){
+  if(request.method!=='POST')return json({error:'METHOD_NOT_ALLOWED'},405);
+  if(request.headers.get('Origin')!==url.origin)return json({error:'INVALID_ORIGIN'},403);
+  const token=cookieValue(request,'basket_session');
+  if(token&&env.DB)await env.DB.prepare('DELETE FROM google_sessions WHERE token_hash = ?').bind(await sha256(token)).run();
+  const secure=url.protocol==='https:'?'; Secure':'';
+  return new Response(null,{status:303,headers:{Location:'/?tab=shopping','Set-Cookie':`basket_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`,'Cache-Control':'no-store','Referrer-Policy':'no-referrer'}});
+ }
+ return null;
+}
 async function paypal(env,path,method='GET',body,key){
  try{return await paypalRequest(env,path,method,body,key)}catch(error){
   if(error instanceof ApiError)throw error;
@@ -62,7 +144,7 @@ async function isPremium(db,user,env){
 }
 function validateItems(items){
  if(!Array.isArray(items)||items.length<1||items.length>200)throw new ApiError('INVALID_ITEMS');
- return items.map(x=>{if(!x||typeof x.name!=='string'||!x.name.trim()||x.name.length>80||!categories.includes(x.category)||!Number.isFinite(x.qty)||x.qty<0.01||x.qty>999||!Number.isFinite(x.price)||x.price<0||x.price>999999999||(x.unit!==undefined&&(typeof x.unit!=='string'||x.unit.length>20)))throw new ApiError('INVALID_ITEMS');return {name:x.name.trim(),category:x.category,qty:x.qty,price:x.price,unit:x.unit?.trim()||''}});
+ return items.map(x=>{if(!x||typeof x.name!=='string'||!x.name.trim()||x.name.length>80||!categories.includes(x.category)||!Number.isFinite(x.qty)||x.qty<0.01||x.qty>999||!Number.isFinite(x.price)||x.price<0||x.price>999999999||(x.unit!==undefined&&(typeof x.unit!=='string'||x.unit.length>20))||(x.priceCurrency!==undefined&&!['USD','VND','EUR','GBP'].includes(x.priceCurrency)))throw new ApiError('INVALID_ITEMS');return {name:x.name.trim(),category:x.category,qty:x.qty,price:x.price,...(x.priceCurrency?{priceCurrency:x.priceCurrency}:{}),unit:x.unit?.trim()||''}});
 }
 function validateHouseholdItem(item){
  if(!item||typeof item.id!=='string'||!/^[A-Za-z0-9_-]{1,80}$/.test(item.id)||typeof item.done!=='boolean')throw new ApiError('INVALID_ITEMS');
@@ -98,7 +180,7 @@ async function resetAttempt(db,user,row,environment,reason){
  return paymentRow(db,user);
 }
 async function api(request,env){
- const url=new URL(request.url),path=url.pathname,user=request.headers.get('oai-authenticated-user-id');
+ const url=new URL(request.url),path=url.pathname,user=await authenticatedUser(request,env);
  if(path==='/api/config'&&request.method==='GET')return json({...PREMIUM_OFFER,checkoutReady:checkoutEnabled(env),environment:paypalEnv(env),coffeeUrl:coffeeUrl(env),coffeeQrImage:safeHttps(env.COFFEE_QR_IMAGE_URL),coffeeDetails:typeof env.COFFEE_DETAILS==='string'?env.COFFEE_DETAILS.slice(0,500):'',signedIn:Boolean(user)});
  if(!user)throw new ApiError('SIGN_IN_REQUIRED',401);
  if(!env.DB)throw new ApiError('SERVICE_UNAVAILABLE',503);
@@ -285,6 +367,7 @@ export default {
  async fetch(request,env){
   try{
    const path=new URL(request.url).pathname;
+   const authResponse=await googleAuth(request,env);if(authResponse)return authResponse;
    if(path.startsWith('/api/'))return await api(request,env);
    if(!['GET','HEAD'].includes(request.method))return json({error:'METHOD_NOT_ALLOWED'},405);
    const asset=assets[path==='/'?'/index.html':path];if(!asset)return new Response('Not found',{status:404});

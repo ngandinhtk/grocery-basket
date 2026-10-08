@@ -10,7 +10,7 @@ const premiumText=[
  ['premium-benefit-account','Your templates and meal plan stay with your signed-in account.','Mẫu riêng và thực đơn được lưu theo tài khoản đăng nhập.'],
  ['premium-free-note','Your shopping list, budget and existing Vietnamese meal templates remain free.','Danh sách đi chợ, ngân sách và các mẫu món Việt hiện có vẫn miễn phí.'],
  ['premium-refresh','Check purchase status','Kiểm tra trạng thái mua'],
- ['coffee-title','Support Basket','Ủng hộ Basket'],
+ ['coffee-title','Buy Basket a Coffee','A small-thanks Basket!'],
  ['coffee-description','Scan the QR code to send a voluntary contribution.','Quét mã QR để gửi khoản ủng hộ tự nguyện.'],
  ['coffee-note','Thank you for your support!','Cảm ơn bạn đã ủng hộ!'],
  ['my-templates-title','My shopping templates','Mẫu đi chợ của tôi'],
@@ -53,10 +53,10 @@ let weeklyShoppingIngredients=[],weeklyShoppingAtHome=new Set();
 function plannedMealIngredients(name){
  const key=ingredientKey(name);
  const saved=savedMeals.find(meal=>ingredientKey(meal.name)===key);
- if(saved)return saved.items.filter(item=>typeof item.name==='string'&&categories.includes(item.category)).map(item=>({name:item.name,category:item.category,qty:item.qty,price:saved.currency===state.currency?item.price:0,unit:item.unit||''}));
+ if(saved)return saved.items.filter(item=>typeof item.name==='string'&&categories.includes(item.category)).map(item=>{const matchingCurrency=saved.currency===state.currency&&(item.priceCurrency||saved.currency)===state.currency;return {name:item.name,category:item.category,qty:item.qty,price:matchingCurrency?item.price:0,priceCurrency:state.currency,unit:item.unit||''}});
  const recipe=templates.find(item=>[item[1],item[2],tr(item[2],item[1])].some(label=>ingredientKey(label)===key));
  if(!recipe)return null;
- return recipe[4].map(value=>{const [ingredient,category]=value.split('|');return {name:ingredient,category:categories[Number(category)],qty:1,price:0,unit:''}});
+ return recipe[4].map(value=>{const [ingredient,category]=value.split('|');return {name:ingredient,category:categories[Number(category)],qty:1,price:0,priceCurrency:state.currency,unit:''}});
 }
 function renderWeeklyShoppingPreview(unmatched=[]){
  $('weekly-shopping-items').innerHTML=weeklyShoppingIngredients.map((item,index)=>`<label class="weekly-shopping-item"><input type="checkbox" data-weekly-have="${index}" ${weeklyShoppingAtHome.has(index)?'checked':''}><span>${escapeHTML(item.name)} <small>${tr(item.category,viCategories[categories.indexOf(item.category)])}</small></span></label>`).join('')||`<p class="empty">${tr('No matching ingredient templates were found.','Chưa tìm thấy mẫu nguyên liệu phù hợp.')}</p>`;
@@ -81,7 +81,7 @@ function prepareWeeklyShopping(){
 }
 function addWeeklyShoppingIngredients(){
  const pending=pendingWeeklyShoppingIngredients();
- state.items.push(...pending.map(item=>({...item,id:crypto.randomUUID(),done:false})));
+ state.items.push(...pending.map(item=>({...item,id:crypto.randomUUID(),priceCurrency:item.priceCurrency||state.currency,done:false})));
  filter='all';save();$('weekly-shopping-preview').hidden=true;
  if(pending.length){showMainTab('shopping');notify(tr(`${pending.length} ingredients added to your list.`,`Đã thêm ${pending.length} nguyên liệu vào danh sách.`))}
  else notify(tr('No new ingredients to add.','Không có nguyên liệu mới để thêm.'));
@@ -97,9 +97,21 @@ function renderCoffeeQr(){
  container.setAttribute('aria-label',tr('Bank donation QR','Mã QR ngân hàng để ủng hộ'));
  $('coffee-missing').hidden=true;
 }
+function weeklyInputSnapshot(){return Array.from({length:7},(_,i)=>$('weekly-'+i).value)}
+function weeklyDirty(){return weeklyInputSnapshot().some((meal,i)=>meal.trim()!==weeklyDays[i])}
+function updateWeeklyStatus(){$('weekly-status').textContent=weeklyDirty()?tr('You have unsaved meal plan changes.','Bạn có thay đổi thực đơn chưa lưu.'):''}
+async function refreshTemplates(){
+ const meals=await premiumApi('/api/templates');savedMeals=meals.templates;renderPremium();
+}
 async function refreshPremium(){
  const status=await premiumApi('/api/premium/status');premiumActive=status.premium;accountReady=true;
- if(premiumActive){const [meals,plan]=await Promise.all([premiumApi('/api/templates'),premiumApi('/api/weekly-plan')]);savedMeals=meals.templates;weeklyDays=plan.days;weeklyDays.forEach((meal,i)=>$('weekly-'+i).value=meal)}
+ if(premiumActive){
+  const previousInput=weeklyInputSnapshot(),preserveInput=weeklyDirty();
+  const [meals,plan]=await Promise.all([premiumApi('/api/templates'),premiumApi('/api/weekly-plan')]);
+  savedMeals=meals.templates;weeklyDays=plan.days;
+  if(!preserveInput&&weeklyInputSnapshot().every((meal,i)=>meal===previousInput[i]))weeklyDays.forEach((meal,i)=>$('weekly-'+i).value=meal);
+  updateWeeklyStatus();
+ }
  renderPremium();
 }
 async function initializePremium(){
@@ -122,9 +134,11 @@ async function initializePremium(){
   if(premiumConfig?.checkoutReady)await premiumApi('/api/paypal/reconcile','POST',{});
   await refreshPremium();$('premium-message').textContent=premiumActive?tr('Your Premium purchase is active.','Gói Premium của bạn đã được kích hoạt.'):tr('No completed Premium purchase found.','Chưa có giao dịch mua Premium hoàn tất.');
  }catch(error){$('premium-message').textContent=premiumError(error)}finally{premiumBusy=false;renderPremium()}});
- $('save-template-form').addEventListener('submit',async e=>{e.preventDefault();if(!state.items.length){notify(tr('Add ingredients to your shopping list first.','Hãy thêm nguyên liệu vào danh sách trước.'));return}const button=$('save-template-button');button.disabled=true;try{await premiumApi('/api/templates','POST',{name:$('template-name').value.trim(),items:state.items.map(({name,category,qty,price,unit})=>({name,category,qty,price,unit}))});$('template-name').value='';await refreshPremium();notify(tr('Personal template saved.','Đã lưu mẫu riêng.'))}catch(error){$('premium-message').textContent=premiumError(error)}finally{button.disabled=false}});
- $('saved-templates').addEventListener('click',async e=>{const addButton=e.target.closest('[data-saved-add]'),deleteButton=e.target.closest('[data-saved-delete]');if(addButton){const meal=savedMeals.find(x=>x.id===addButton.dataset.savedAdd);if(!meal)return;let count=0;meal.items.forEach(x=>{if(!state.items.some(item=>!item.done&&item.name.toLocaleLowerCase()===x.name.toLocaleLowerCase())){state.items.push({...x,id:crypto.randomUUID(),done:false});count++}});filter='all';save();showMainTab('shopping');notify(tr(`${count} ingredients added.`, `Đã thêm ${count} nguyên liệu.`))}else if(deleteButton){deleteButton.disabled=true;try{await premiumApi('/api/templates/'+encodeURIComponent(deleteButton.dataset.savedDelete),'DELETE');await refreshPremium()}catch(error){$('premium-message').textContent=premiumError(error);deleteButton.disabled=false}}});
- $('weekly-form').addEventListener('submit',async e=>{e.preventDefault();$('save-weekly').disabled=true;try{weeklyDays=Array.from({length:7},(_,i)=>$('weekly-'+i).value.trim());await premiumApi('/api/weekly-plan','PUT',{days:weeklyDays});notify(tr('Weekly meal plan saved.','Đã lưu thực đơn tuần.'))}catch(error){$('premium-message').textContent=premiumError(error)}finally{$('save-weekly').disabled=false}});
+ $('save-template-form').addEventListener('submit',async e=>{e.preventDefault();if(!state.items.length){notify(tr('Add ingredients to your shopping list first.','Hãy thêm nguyên liệu vào danh sách trước.'));return}const button=$('save-template-button');button.disabled=true;try{await premiumApi('/api/templates','POST',{name:$('template-name').value.trim(),currency:state.currency,items:state.items.map(({name,category,qty,price,priceCurrency,unit})=>({name,category,qty,price,priceCurrency:priceCurrency||state.currency,unit}))});$('template-name').value='';await refreshTemplates();notify(tr('Personal template saved.','Đã lưu mẫu riêng.'))}catch(error){$('premium-message').textContent=premiumError(error)}finally{button.disabled=false}});
+ $('saved-templates').addEventListener('click',async e=>{const addButton=e.target.closest('[data-saved-add]'),deleteButton=e.target.closest('[data-saved-delete]');if(addButton){const meal=savedMeals.find(x=>x.id===addButton.dataset.savedAdd);if(!meal)return;let count=0;meal.items.forEach(x=>{if(!state.items.some(item=>!item.done&&item.name.toLocaleLowerCase()===x.name.toLocaleLowerCase())){const matchingCurrency=meal.currency===state.currency&&(x.priceCurrency||meal.currency)===state.currency;state.items.push({...x,id:crypto.randomUUID(),priceCurrency:state.currency,price:matchingCurrency?x.price:0,done:false});count++}});filter='all';save();showMainTab('shopping');notify(tr(`${count} ingredients added.`, `Đã thêm ${count} nguyên liệu.`))}else if(deleteButton){deleteButton.disabled=true;try{await premiumApi('/api/templates/'+encodeURIComponent(deleteButton.dataset.savedDelete),'DELETE');await refreshTemplates()}catch(error){$('premium-message').textContent=premiumError(error);deleteButton.disabled=false}}});
+ $('weekly-form').addEventListener('input',updateWeeklyStatus);
+ window.addEventListener('beforeunload',event=>{if(weeklyDirty()){event.preventDefault();event.returnValue=''}});
+ $('weekly-form').addEventListener('submit',async e=>{e.preventDefault();$('save-weekly').disabled=true;const submitted=weeklyInputSnapshot().map(meal=>meal.trim());try{await premiumApi('/api/weekly-plan','PUT',{days:submitted});weeklyDays=submitted;updateWeeklyStatus();notify(tr('Weekly meal plan saved.','Đã lưu thực đơn tuần.'))}catch(error){$('premium-message').textContent=premiumError(error)}finally{$('save-weekly').disabled=false}});
 $('weekly-shopping-build').addEventListener('click',prepareWeeklyShopping);
 $('weekly-shopping-items').addEventListener('change',e=>{const checkbox=e.target.closest('[data-weekly-have]');if(!checkbox)return;const index=Number(checkbox.dataset.weeklyHave);if(checkbox.checked)weeklyShoppingAtHome.add(index);else weeklyShoppingAtHome.delete(index);$('weekly-shopping-add').disabled=!pendingWeeklyShoppingIngredients().length});
 $('weekly-shopping-add').addEventListener('click',addWeeklyShoppingIngredients);

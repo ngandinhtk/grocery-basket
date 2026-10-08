@@ -34,6 +34,13 @@ vm.runInContext("state.language='en'; state.currency='USD'; render();",context);
 assert.equal(nodes['templates-title'].textContent,'A little inspiration for your next shop');
 assert.equal(nodes.total.textContent,'$0.00');
 assert.equal(nodes['template-kind'].value,'dish');
+vm.runInContext("add('Coffee','Pantry',1,4);state.currency='VND';$('currency').value='VND';add('Fish','Meat & seafood',1,30000);render();",context);
+assert(nodes.total.textContent.includes('₫'));
+assert(nodes['budget-message'].textContent.includes('Budget is set in USD'));
+assert(nodes['budget-message'].textContent.includes('other currencies are excluded'));
+vm.runInContext("state.budgetCurrency='VND';render();",context);
+assert(nodes['budget-message'].textContent.includes('over your budget'));
+vm.runInContext("state.currency='USD';$('currency').value='USD';state.items=state.items.filter(item=>!['Fish','Coffee'].includes(item.name));render();",context);
 console.log('Passed 20 templates, ingredient search, meal filters, duplicate handling, Vietnamese persistence, English switching, and preserved filters.');
 vm.runInContext("$('template-kind').value='all'; $('template-diet').value='vegetarian'; renderTemplates();",context);
 assert.equal((nodes['template-grid'].innerHTML.match(/data-template=/g)||[]).length,8);
@@ -51,6 +58,9 @@ assert.equal(vm.runInContext('state.items[0].actualPrice',context),45000);
 assert.equal(vm.runInContext('state.items[0].actualCurrency',context),'USD');
 assert.equal(JSON.parse(storage['basket-v1']).purchaseHistory[0].actualUnitPrice,45000);
 assert(nodes['budget-message'].textContent.includes('Actual spend'));
+assert(vm.runInContext("updateIngredient(state.items[0].id,{name:'Nấm',category:'Produce',qty:'0.5',unit:'kg',price:'40000',priceCurrency:'VND',actualPrice:'45000',actualCurrency:'USD'})",context));
+assert(nodes['budget-message'].textContent.includes('no comparable estimate'));
+assert(vm.runInContext("updateIngredient(state.items[0].id,{name:'Nấm',category:'Produce',qty:'0.5',unit:'kg',price:'40000',priceCurrency:'USD',actualPrice:'45000',actualCurrency:'USD'})",context));
 vm.runInContext("state.currency='EUR'; render();",context);
 assert(!nodes['budget-message'].textContent.includes('Actual spend'));
 vm.runInContext("state.currency='USD'; render();",context);
@@ -92,3 +102,14 @@ vm.runInContext('setShoppingMode(false);',context);
 assert.equal(vm.runInContext('filter',context),'done');
 assert.equal(vm.runInContext('shoppingMode',context),false);
 console.log('Passed focused shopping mode, immediate removal of checked items, and filter restoration.');
+const legacyNodes={};
+const legacyContext=vm.createContext({
+ document:{documentElement:{},body:node(),getElementById:id=>legacyNodes[id]??=node(),querySelector:selector=>legacyNodes[selector]??=node(),querySelectorAll:()=>[],createElement:()=>node()},
+ localStorage:{getItem:key=>key==='basket-v1'?JSON.stringify({currency:'EUR',budget:50,items:[{id:'legacy',name:'Rice',category:'Pantry',qty:2,price:4,done:false}]}):null,setItem(){}},
+ Intl,crypto:require('crypto').webcrypto,setTimeout,clearTimeout
+});
+vm.runInContext(fs.readFileSync('dist/app.js','utf8'),legacyContext);
+assert.equal(vm.runInContext('state.items[0].priceCurrency',legacyContext),'EUR');
+assert.equal(vm.runInContext('state.budgetCurrency',legacyContext),'EUR');
+assert(legacyNodes.total.textContent.includes('€'));
+console.log('Passed migration of legacy prices and budgets without changing their numeric amounts.');

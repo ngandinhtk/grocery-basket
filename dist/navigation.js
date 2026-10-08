@@ -15,7 +15,7 @@ function localizeNavigation(){
  $('tab-shopping').textContent=tr('Shopping list','Danh sách đi chợ');
  $('tab-recipes').textContent=tr('Templates & meal ideas','Mẫu & gợi ý món ăn');
  $('tab-premium').textContent=tr('Support Basket','Ủng hộ Basket');
- shoppingModeToggle.textContent=tr(shoppingMode?'Exit shopping mode':'Start shopping mode',shoppingMode?'Thoát chế độ đi chợ':'Bắt đầu đi chợ');
+ shoppingModeToggle.textContent=tr(shoppingMode?'Exit shopping mode':'Start',shoppingMode?'Thoát chế độ đi chợ':'Bắt đầu');
  shoppingModeToggle.setAttribute('aria-pressed',String(shoppingMode));
 }
 for(const name of mainTabs){
@@ -30,3 +30,15 @@ for(const name of mainTabs){
 const renderBeforeNavigation=render;
 render=function(){renderBeforeNavigation();localizeNavigation()};
 localizeNavigation();showMainTab('shopping');
+// Header scroll behaviour: add/remove 'scrolled' class for visual fix on scroll
+if (typeof window !== 'undefined' && window.addEventListener) {
+  const headerEl = document.querySelector('header');
+  function updateHeaderScrolled() {
+    if (!headerEl) return;
+    if (window.scrollY > 0) headerEl.classList.add('scrolled');
+    else headerEl.classList.remove('scrolled');
+  }
+  window.addEventListener('scroll', updateHeaderScrolled, {passive: true});
+  // run once on load
+  updateHeaderScrolled();
+}
