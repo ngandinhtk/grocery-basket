@@ -1,0 +1,9 @@
+{
+  "name": "basket",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node check.cjs && node --test test/*.test.mjs"
+  }
+}

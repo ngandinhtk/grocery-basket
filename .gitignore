@@ -1,1 +1,6 @@
 .openai/*.tar.gz
+.openai/zentation-reference*
+.env*
+!.env.example
+node_modules/
+dist/server/
