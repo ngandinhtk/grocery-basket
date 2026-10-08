@@ -1,4 +1,11 @@
 let premiumConfig=null,premiumActive=false,premiumBusy=false,savedMeals=[],weeklyDays=Array(7).fill(''),accountReady=false;
+let weeklyRevision=0;
+let addingMeal=null;
+const readWeekly=()=>Array.from({length:7},(_,i)=>$('weekly-'+i).value.trim());
+const weeklyDirty=()=>readWeekly().some((meal,i)=>meal!==weeklyDays[i]);
+function renderWeeklyStatus(){
+ $('weekly-status').textContent=weeklyDirty()?tr('Unsaved changes','Có thay đổi chưa lưu'):tr('All changes saved','Đã lưu mọi thay đổi');
+}
 const weekdayNames=[['Monday','Thứ hai'],['Tuesday','Thứ ba'],['Wednesday','Thứ tư'],['Thursday','Thứ năm'],['Friday','Thứ sáu'],['Saturday','Thứ bảy'],['Sunday','Chủ nhật']];
 const premiumText=[
  ['premium-kicker','A little more room for your plans','THÊM KHÔNG GIAN CHO KẾ HOẠCH CỦA BẠN'],
@@ -38,12 +45,13 @@ function renderPremium(){
   const original=price.querySelector('s'),current=price.querySelector('strong');
   original.textContent='$'+Number(premiumConfig.originalPrice);original.setAttribute('aria-label',tr(`Original price ${premiumConfig.originalPrice} USD`,`Giá gốc ${premiumConfig.originalPrice} USD`));
   current.textContent='$'+Number(premiumConfig.price);
-  const currency=document.createElement('span');currency.textContent=' USD';current.append(currency);
+  const currency=document.createElement('span');currency.textContent=' '+premiumConfig.currency;current.append(currency);
  }
  $('template-name').placeholder=tr('e.g. Our Sunday dinner','Ví dụ: Bữa cơm chủ nhật');
- $('premium-pay').textContent=premiumBusy?tr('Please wait…','Vui lòng chờ…'):tr('Pay $3 with PayPal','Thanh toán 3 USD qua PayPal');
+ const checkoutPrice=premiumConfig?`${Number(premiumConfig.price)} ${premiumConfig.currency}`:'';
+ $('premium-pay').textContent=premiumBusy?tr('Please wait…','Vui lòng chờ…'):premiumConfig?tr(`Pay ${checkoutPrice} with PayPal`,`Thanh toán ${checkoutPrice} qua PayPal`):tr('Loading price…','Đang tải giá…');
  $('premium-pay').disabled=premiumBusy||!premiumConfig?.checkoutReady||!accountReady||premiumActive;
- $('premium-refresh').disabled=premiumBusy||!accountReady;
+ $('premium-refresh').disabled=premiumBusy||!premiumConfig?.signedIn;
  $('premium-offer-card').hidden=premiumActive;$('premium-dashboard').hidden=!premiumActive;
  $('premium-membership').textContent=premiumActive?tr('✦ Premium active','✦ Premium đã kích hoạt'):tr('Basket Premium','Basket Premium');
  $('premium-signin').hidden=Boolean(premiumConfig?.signedIn);$('premium-signin').textContent=tr('Sign in with ChatGPT','Đăng nhập bằng ChatGPT');
@@ -53,18 +61,26 @@ function renderPremium(){
  $('coffee-link').hidden=!premiumConfig?.coffeeUrl;
  $('coffee-details').textContent=premiumConfig?.coffeeDetails||'';
  if(premiumConfig?.coffeeUrl)$('coffee-link').href=premiumConfig.coffeeUrl;
- $('saved-templates').innerHTML=savedMeals.length?savedMeals.map(x=>`<article class="saved-meal"><div><h3>${escapeHTML(x.name)}</h3><p>${x.items.length} ${tr('ingredients','nguyên liệu')}</p></div><button type="button" class="outline" data-saved-add="${escapeHTML(x.id)}">${tr('Add to list','Thêm vào danh sách')}</button><button type="button" class="text-button" data-saved-delete="${escapeHTML(x.id)}">${tr('Delete','Xóa')}</button></article>`).join(''):`<p class="empty">${tr('Save a shopping list to create your first personal template.','Lưu một danh sách đi chợ để tạo mẫu riêng đầu tiên.')}</p>`;
+ $('saved-templates').innerHTML=savedMeals.length?savedMeals.map(x=>`<article class="saved-meal"><div><h3>${escapeHTML(x.name)}</h3><p>${x.items.length} ${tr('ingredients','nguyên liệu')} · ${x.currency?escapeHTML(x.currency):tr('Currency unknown','Chưa rõ tiền tệ')}</p></div><button type="button" class="outline" data-saved-add="${escapeHTML(x.id)}">${tr('Add to list','Thêm vào danh sách')}</button><button type="button" class="text-button" data-saved-delete="${escapeHTML(x.id)}">${tr('Delete','Xóa')}</button></article>`).join(''):`<p class="empty">${tr('Save a shopping list to create your first personal template.','Lưu một danh sách đi chợ để tạo mẫu riêng đầu tiên.')}</p>`;
  document.querySelectorAll('[data-weekday]').forEach(el=>{el.querySelector('span').textContent=tr(...weekdayNames[Number(el.dataset.weekday)]);el.querySelector('input').placeholder=tr('What are we cooking?','Hôm nay nấu gì?')});
  $('meal-options').innerHTML=[...templates.map(x=>tr(x[2],x[1])),...savedMeals.map(x=>x.name)].map(name=>`<option value="${escapeHTML(name)}"></option>`).join('');
+ renderWeeklyStatus();
 }
 function renderCoffeeQr(){
  $('coffee-qr').replaceChildren();
  if(premiumConfig?.coffeeQrImage){const img=document.createElement('img');img.src=premiumConfig.coffeeQrImage;img.alt=tr('Bank donation QR','Mã QR ngân hàng để ủng hộ');img.onerror=()=>{$('coffee-qr').replaceChildren();$('coffee-missing').hidden=false;$('coffee-missing').textContent=tr('Unable to load this QR. Please try again later.','Chưa tải được mã QR. Vui lòng thử lại sau.')};$('coffee-qr').append(img)}
  else if(premiumConfig?.coffeeUrl){try{const qr=qrcode(0,'M');qr.addData(premiumConfig.coffeeUrl);qr.make();$('coffee-qr').innerHTML=qr.createSvgTag({cellSize:4,margin:16,scalable:true});$('coffee-qr').setAttribute('aria-label',tr('Scan to open the donation page','Quét mã để mở trang ủng hộ'))}catch{$('coffee-missing').hidden=false}}
 }
+async function refreshTemplates(){
+ const meals=await premiumApi('/api/templates');savedMeals=meals.templates;renderPremium();
+}
 async function refreshPremium(){
+ const revision=weeklyRevision,canLoadPlan=!weeklyDirty()&&!$('save-weekly').disabled;
  const status=await premiumApi('/api/premium/status');premiumActive=status.premium;accountReady=true;
- if(premiumActive){const [meals,plan]=await Promise.all([premiumApi('/api/templates'),premiumApi('/api/weekly-plan')]);savedMeals=meals.templates;weeklyDays=plan.days;weeklyDays.forEach((meal,i)=>$('weekly-'+i).value=meal)}
+ if(premiumActive){
+  const [meals,plan]=await Promise.all([premiumApi('/api/templates'),premiumApi('/api/weekly-plan')]);savedMeals=meals.templates;
+  if(canLoadPlan&&!weeklyDirty()&&!$('save-weekly').disabled&&revision===weeklyRevision){weeklyDays=plan.days;weeklyDays.forEach((meal,i)=>$('weekly-'+i).value=meal)}
+ }
  renderPremium();
 }
 async function initializePremium(){
@@ -83,12 +99,28 @@ async function initializePremium(){
  $('premium-pay').addEventListener('click',async()=>{if(premiumBusy)return;premiumBusy=true;renderPremium();$('premium-message').textContent='';try{const data=await premiumApi('/api/paypal/create-order','POST',{});if(data.premium){await refreshPremium();return}window.location.assign(data.approvalUrl)}catch(error){$('premium-message').textContent=premiumError(error)}finally{premiumBusy=false;renderPremium()}});
  $('premium-refresh').addEventListener('click',async()=>{premiumBusy=true;renderPremium();try{
   const params=new URLSearchParams(window.location.search);
-  if(params.get('payment')==='paypal-return'&&params.get('token'))await premiumApi('/api/paypal/capture-order','POST',{orderId:params.get('token')});
-  await refreshPremium();$('premium-message').textContent=premiumActive?tr('Your Premium purchase is active.','Gói Premium của bạn đã được kích hoạt.'):tr('No completed Premium purchase found.','Chưa có giao dịch mua Premium hoàn tất.');
+ if(params.get('payment')==='paypal-return'&&params.get('token'))await premiumApi('/api/paypal/capture-order','POST',{orderId:params.get('token')});
+  const reconciliation=await premiumApi('/api/paypal/reconcile','POST',{});
+  await refreshPremium();$('premium-message').textContent=premiumActive?tr('Your Premium purchase is active.','Gói Premium của bạn đã được kích hoạt.'):reconciliation.status==='EXPIRED'?tr('The old checkout expired. Use the PayPal button to start a new checkout.','Phiên thanh toán cũ đã hết hạn. Bấm nút PayPal để bắt đầu phiên mới.'):tr('No completed Premium purchase found.','Chưa có giao dịch mua Premium hoàn tất.');
  }catch(error){$('premium-message').textContent=premiumError(error)}finally{premiumBusy=false;renderPremium()}});
- $('save-template-form').addEventListener('submit',async e=>{e.preventDefault();if(!state.items.length){notify(tr('Add ingredients to your shopping list first.','Hãy thêm nguyên liệu vào danh sách trước.'));return}const button=$('save-template-button');button.disabled=true;try{await premiumApi('/api/templates','POST',{name:$('template-name').value.trim(),items:state.items.map(({name,category,qty,price,unit})=>({name,category,qty,price,unit}))});$('template-name').value='';await refreshPremium();notify(tr('Personal template saved.','Đã lưu mẫu riêng.'))}catch(error){$('premium-message').textContent=premiumError(error)}finally{button.disabled=false}});
- $('saved-templates').addEventListener('click',async e=>{const addButton=e.target.closest('[data-saved-add]'),deleteButton=e.target.closest('[data-saved-delete]');if(addButton){const meal=savedMeals.find(x=>x.id===addButton.dataset.savedAdd);if(!meal)return;let count=0;meal.items.forEach(x=>{if(!state.items.some(item=>!item.done&&item.name.toLocaleLowerCase()===x.name.toLocaleLowerCase())){state.items.push({...x,id:crypto.randomUUID(),done:false});count++}});filter='all';save();showMainTab('shopping');notify(tr(`${count} ingredients added.`, `Đã thêm ${count} nguyên liệu.`))}else if(deleteButton){deleteButton.disabled=true;try{await premiumApi('/api/templates/'+encodeURIComponent(deleteButton.dataset.savedDelete),'DELETE');await refreshPremium()}catch(error){$('premium-message').textContent=premiumError(error);deleteButton.disabled=false}}});
- $('weekly-form').addEventListener('submit',async e=>{e.preventDefault();$('save-weekly').disabled=true;try{weeklyDays=Array.from({length:7},(_,i)=>$('weekly-'+i).value.trim());await premiumApi('/api/weekly-plan','PUT',{days:weeklyDays});notify(tr('Weekly meal plan saved.','Đã lưu thực đơn tuần.'))}catch(error){$('premium-message').textContent=premiumError(error)}finally{$('save-weekly').disabled=false}});
+ $('save-template-form').addEventListener('submit',async e=>{e.preventDefault();if(!state.items.length){notify(tr('Add ingredients to your shopping list first.','Hãy thêm nguyên liệu vào danh sách trước.'));return}const button=$('save-template-button');button.disabled=true;try{await premiumApi('/api/templates','POST',{name:$('template-name').value.trim(),currency:state.currency,items:state.items.map(({name,category,qty,price,unit})=>({name,category,qty,price,unit}))});$('template-name').value='';await refreshTemplates();notify(tr('Personal template saved.','Đã lưu mẫu riêng.'))}catch(error){$('premium-message').textContent=premiumError(error)}finally{button.disabled=false}});
+ function openTemplateImport(meal){
+  addingMeal=meal;
+  $('import-title').textContent=tr(`Add ${meal.name}`,`Thêm ${meal.name}`);
+  $('import-note').textContent=tr('Only ingredients with matching names, categories and units can be combined. Different units stay separate. Combined unit prices preserve the estimated total.','Chỉ gộp nguyên liệu cùng tên, nhóm và đơn vị. Đơn vị khác nhau được giữ riêng. Đơn giá sau gộp giữ nguyên tổng tiền ước tính.');
+  $('import-currency').textContent=meal.currency===state.currency?tr(`Prices use ${state.currency}.`,`Giá sử dụng ${state.currency}.`):tr(`This template uses ${meal.currency||'an unknown currency'}. Ingredients will be added without template prices; enter new prices in ${state.currency}.`,`Mẫu này ${meal.currency?'dùng '+meal.currency:'chưa rõ tiền tệ'}. Nguyên liệu được thêm không kèm giá mẫu; hãy nhập lại giá theo ${state.currency}.`);
+  $('import-mode-label').textContent=tr('Matching ingredients','Nguyên liệu trùng');
+  $('import-mode').innerHTML=[['merge','Combine quantities','Gộp số lượng'],['separate','Keep separate','Giữ thành dòng riêng'],['skip','Skip matching items','Bỏ qua nguyên liệu trùng']].map(([value,en,vi])=>`<option value="${value}">${tr(en,vi)}</option>`).join('');
+  $('import-confirm').textContent=tr('Add ingredients','Thêm nguyên liệu');$('import-cancel').textContent=tr('Cancel','Hủy');
+  $('template-import').showModal();$('import-mode').focus();
+ }
+ $('saved-templates').addEventListener('click',async e=>{const addButton=e.target.closest('[data-saved-add]'),deleteButton=e.target.closest('[data-saved-delete]');if(addButton){const meal=savedMeals.find(x=>x.id===addButton.dataset.savedAdd);if(meal)openTemplateImport(meal)}else if(deleteButton){deleteButton.disabled=true;try{await premiumApi('/api/templates/'+encodeURIComponent(deleteButton.dataset.savedDelete),'DELETE');await refreshTemplates()}catch(error){$('premium-message').textContent=premiumError(error);deleteButton.disabled=false}}});
+ $('import-cancel').addEventListener('click',()=>$('template-import').close());
+ $('template-import').addEventListener('close',()=>addingMeal=null);
+ $('import-form').addEventListener('submit',e=>{e.preventDefault();if(!addingMeal)return;const result=combineTemplate(state.items,addingMeal,{mode:$('import-mode').value,currency:state.currency});state.items=result.items;filter='all';save();$('template-import').close();showMainTab('shopping');notify(tr(`${result.added} added, ${result.merged} combined, ${result.skipped} skipped.`,`${result.added} dòng mới, ${result.merged} dòng gộp, ${result.skipped} dòng bỏ qua.`))});
+ $('weekly-form').addEventListener('input',()=>{weeklyRevision++;renderWeeklyStatus()});
+ window.addEventListener('beforeunload',e=>{if(weeklyDirty()){e.preventDefault();e.returnValue=''}});
+ $('weekly-form').addEventListener('submit',async e=>{e.preventDefault();if($('save-weekly').disabled)return;$('save-weekly').disabled=true;weeklyRevision++;const snapshot=readWeekly();try{await premiumApi('/api/weekly-plan','PUT',{days:snapshot});weeklyDays=snapshot;notify(tr('Weekly meal plan saved.','Đã lưu thực đơn tuần.'))}catch(error){$('premium-message').textContent=premiumError(error)}finally{$('save-weekly').disabled=false;renderWeeklyStatus()}});
 const renderBeforePremium=render;
 render=function(){renderBeforePremium();renderPremium()};
 renderPremium();initializePremium();
