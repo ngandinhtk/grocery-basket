@@ -3,6 +3,8 @@
 .env*
 !.env.example
 node_modules/
+dist/netlify/
+.netlify/
 dist/server/
 dist/.openai/
 dist/coffee-bank.js

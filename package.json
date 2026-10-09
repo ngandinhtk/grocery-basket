@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
+    "build:netlify": "node scripts/build-netlify.mjs",
     "test": "node scripts/build.mjs && node check.cjs && node --test test/*.test.mjs"
   }
 }

@@ -4,6 +4,7 @@ const {version}=JSON.parse(fs.readFileSync('package.json','utf8'));
 if(!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version))throw Error('package.json must contain a valid semantic version.');
 const donation=JSON.parse(fs.readFileSync('public/coffee-account.json','utf8'));
 const qrImage='data:image/jpeg;base64,'+fs.readFileSync('public/bank-qr.jpg').toString('base64');
+const faviconImg='data:image/svg+xml;base64,'+fs.readFileSync('public/favicon.svg').toString('base64');
 fs.writeFileSync('dist/coffee-bank.js',`const BANK_DONATION=${JSON.stringify({...donation,qrImage})};\n`);
 const escapeAttribute=value=>String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const assets={};
