@@ -13,6 +13,7 @@ async function ui({failConfig=false}={}){
  },Response,URLSearchParams,crypto:webcrypto,console});
  vm.runInContext(`const $=id=>document.getElementById(id);const state={items:[],currency:'VND'};let filter='all';const categories=['Produce','Dairy & eggs','Meat & seafood','Bakery','Pantry','Frozen','Household'];const viCategories=categories;const templates=[];function tr(en,vi){return vi}function escapeHTML(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}function render(){}function save(){}function notify(){}function showMainTab(){}`,context);
  vm.runInContext(fs.readFileSync('dist/premium-data.js','utf8'),context);
+ vm.runInContext(fs.readFileSync('dist/vietnam.js','utf8').split('const ingredientEnglish=')[1].split('const templates=')[0].replace(/^/, 'const ingredientEnglish='),context);
  vm.runInContext(fs.readFileSync('dist/coffee-bank.js','utf8'),context);
  vm.runInContext(fs.readFileSync('dist/premium.js','utf8'),context);
  await new Promise(resolve=>setImmediate(resolve));

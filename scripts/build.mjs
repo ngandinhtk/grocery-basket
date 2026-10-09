@@ -1,11 +1,20 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import {createHash} from 'node:crypto';
 const {version}=JSON.parse(fs.readFileSync('package.json','utf8'));
 if(!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version))throw Error('package.json must contain a valid semantic version.');
 const donation=JSON.parse(fs.readFileSync('public/coffee-account.json','utf8'));
 const qrImage='data:image/jpeg;base64,'+fs.readFileSync('public/bank-qr.jpg').toString('base64');
 const faviconImg='data:image/svg+xml;base64,'+fs.readFileSync('public/favicon.svg').toString('base64');
 fs.writeFileSync('dist/coffee-bank.js',`const BANK_DONATION=${JSON.stringify({...donation,qrImage})};\n`);
+const homepage=fs.readFileSync('dist/index.html','utf8');
+const browserFiles=[...homepage.matchAll(/(?:src|href)="([^"#]+)"/g)].map(match=>match[1]).filter(filename=>!filename.includes(':')).map(filename=>filename.replace(/^\//,''));
+const cacheHash=createHash('sha256');
+cacheHash.update(version);
+cacheHash.update(homepage);
+for(const filename of [...new Set(browserFiles)])cacheHash.update(fs.readFileSync(fs.existsSync(path.join('dist',filename))?path.join('dist',filename):path.join('public',filename)));
+const serviceWorker=fs.readFileSync('scripts/service-worker-template.js','utf8').replace('__CACHE_NAME__',JSON.stringify('smolbasket-'+cacheHash.digest('hex').slice(0,16))).replace('__PRECACHE__',JSON.stringify(['/',...new Set(browserFiles.map(filename=>'/'+filename))]));
+fs.writeFileSync('dist/sw.js',serviceWorker);
 const escapeAttribute=value=>String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const assets={};
 for(const filename of fs.readdirSync('dist')){

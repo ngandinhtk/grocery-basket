@@ -56,7 +56,7 @@ function plannedMealIngredients(name){
  if(saved)return saved.items.filter(item=>typeof item.name==='string'&&categories.includes(item.category)).map(item=>{const matchingCurrency=saved.currency===state.currency&&(item.priceCurrency||saved.currency)===state.currency;return {name:item.name,category:item.category,qty:item.qty,price:matchingCurrency?item.price:0,priceCurrency:state.currency,unit:item.unit||''}});
  const recipe=templates.find(item=>[item[1],item[2],tr(item[2],item[1])].some(label=>ingredientKey(label)===key));
  if(!recipe)return null;
- return recipe[4].map(value=>{const [ingredient,category]=value.split('|');return {name:ingredient,category:categories[Number(category)],qty:1,price:0,priceCurrency:state.currency,unit:''}});
+ return recipe[4].map(value=>{const [ingredient,category]=value.split('|');return {name:templateIngredientName(ingredient),templateIngredient:ingredient,category:categories[Number(category)],qty:1,price:0,priceCurrency:state.currency,unit:''}});
 }
 function renderWeeklyShoppingPreview(unmatched=[]){
  $('weekly-shopping-items').innerHTML=weeklyShoppingIngredients.map((item,index)=>`<label class="weekly-shopping-item"><input type="checkbox" data-weekly-have="${index}" ${weeklyShoppingAtHome.has(index)?'checked':''}><span>${escapeHTML(item.name)} <small>${tr(item.category,viCategories[categories.indexOf(item.category)])}</small></span></label>`).join('')||`<p class="empty">${tr('No matching ingredient templates were found.','Chưa tìm thấy mẫu nguyên liệu phù hợp.')}</p>`;
